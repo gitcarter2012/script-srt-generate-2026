@@ -14,6 +14,9 @@ py .\gerar_srt.py
 
 Sem argumentos, o script abre uma janela para selecionar um ou varios arquivos.
 Para cada arquivo selecionado, o .srt e criado na mesma pasta do video/audio.
+Ao iniciar, o script pergunta no terminal:
+- 1 = com CUDA (GPU NVIDIA)
+- 2 = sem CUDA (CPU)
 O terminal mostra:
 - painel colorido com configuracao atual
 - tabela dos arquivos selecionados
@@ -46,6 +49,13 @@ Com opcoes:
 
 ```powershell
 py .\gerar_srt.py .\Donations2.mp4 --model small --source en --target pt --output legenda_final
+```
+
+Definir dispositivo sem pergunta interativa:
+
+```powershell
+py .\gerar_srt.py .\Donations2.mp4 --device cuda
+py .\gerar_srt.py .\Donations2.mp4 --device cpu
 ```
 
 Observacao: use --output apenas com um unico arquivo de entrada.

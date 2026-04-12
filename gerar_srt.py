@@ -131,6 +131,20 @@ def ensure_torch_cuda() -> object:
     raise SystemExit(subprocess.call(restart_args))
 
 
+def choose_device_mode() -> str:
+    print("\nEscolha o modo de execucao:")
+    print("  1) Com CUDA (GPU NVIDIA)")
+    print("  2) Sem CUDA (CPU)")
+    try:
+        choice = input("Digite 1 ou 2 [padrao 1]: ").strip()
+    except EOFError:
+        return "cuda"
+
+    if choice == "2":
+        return "cpu"
+    return "cuda"
+
+
 def select_input_files() -> list[str]:
     root = tk.Tk()
     root.withdraw()
@@ -252,7 +266,14 @@ def print_selected_files_table(console: object, input_paths: list[Path], duratio
     console.print(table)
 
 
-def get_runtime_device(torch_module: object) -> tuple[str, bool]:
+def get_runtime_device(torch_module: object, preferred_mode: str) -> tuple[str, bool]:
+    if preferred_mode == "cpu":
+        return "cpu", False
+
+    if preferred_mode == "cuda" and not torch_module.cuda.is_available():
+        print("CUDA foi solicitado, mas nao esta disponivel. Continuando em CPU.")
+        return "cpu", False
+
     if torch_module.cuda.is_available():
         return "cuda", True
     return "cpu", False
@@ -319,6 +340,7 @@ def main() -> None:
     parser.add_argument("--source", default="en", help="Idioma do áudio (ex: en)")
     parser.add_argument("--target", default="pt", help="Idioma de tradução (ex: pt)")
     parser.add_argument("--output", default=None, help="Nome base do arquivo de saída (sem extensão)")
+    parser.add_argument("--device", choices=["ask", "cuda", "cpu"], default="ask", help="Dispositivo: ask (pergunta 1/2), cuda ou cpu")
     args = parser.parse_args()
 
     ensure_dependencies()
@@ -326,7 +348,8 @@ def main() -> None:
 
     whisper = importlib.import_module("whisper")
     GoogleTranslator = importlib.import_module("deep_translator").GoogleTranslator
-    torch = ensure_torch_cuda()
+    selected_device_mode = choose_device_mode() if args.device == "ask" else args.device
+    torch = ensure_torch_cuda() if selected_device_mode == "cuda" else importlib.import_module("torch")
     Console = importlib.import_module("rich.console").Console
     console = Console(highlight=False)
 
@@ -343,7 +366,7 @@ def main() -> None:
     if args.output and len(input_paths) > 1:
         raise ValueError("Use --output apenas quando houver um unico arquivo de entrada.")
 
-    device, use_fp16 = get_runtime_device(torch)
+    device, use_fp16 = get_runtime_device(torch, selected_device_mode)
     gpu_name = torch.cuda.get_device_name(0) if device == "cuda" else "CPU"
     print_header(console, args.model, args.source, args.target, device)
     if device == "cuda":
