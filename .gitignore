@@ -1,0 +1,27 @@
+# Virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Generated subtitles
+*.srt
+
+# Local media files (very large)
+*.mp4
+*.mkv
+*.mov
+*.avi
+*.wmv
+*.webm
+*.mp3
+*.wav
+*.m4a
+*.flac
+*.aac
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/

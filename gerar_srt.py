@@ -1,0 +1,364 @@
+import argparse
+import importlib
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+import time
+import tkinter as tk
+from tkinter import filedialog
+
+from tqdm import tqdm
+
+
+def ensure_dependencies() -> None:
+    required = {
+        "whisper": "openai-whisper",
+        "deep_translator": "deep-translator",
+        "imageio_ffmpeg": "imageio-ffmpeg",
+        "rich": "rich",
+    }
+    missing_packages = []
+
+    for module_name, package_name in required.items():
+        try:
+            importlib.import_module(module_name)
+        except ModuleNotFoundError:
+            missing_packages.append(package_name)
+
+    if not missing_packages:
+        return
+
+    print("Instalando dependencias ausentes:", ", ".join(missing_packages))
+    subprocess.check_call([sys.executable, "-m", "pip", "install", *missing_packages])
+
+
+def get_nvidia_gpu_name() -> str | None:
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return None
+
+    lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    return lines[0] if lines else None
+
+
+def ensure_ffmpeg() -> None:
+    if shutil.which("ffmpeg"):
+        return
+
+    print("FFmpeg nao encontrado no sistema. Preparando instalacao automatica...")
+
+    try:
+        imageio_ffmpeg = importlib.import_module("imageio_ffmpeg")
+    except ModuleNotFoundError:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "imageio-ffmpeg"])
+        imageio_ffmpeg = importlib.import_module("imageio_ffmpeg")
+
+    ffmpeg_exe = Path(imageio_ffmpeg.get_ffmpeg_exe())
+    if not ffmpeg_exe.exists():
+        raise RuntimeError("Nao foi possivel obter o executavel do FFmpeg automaticamente.")
+
+    ffmpeg_dir = str(ffmpeg_exe.parent)
+    current_path = os.environ.get("PATH", "")
+    if ffmpeg_dir not in current_path.split(os.pathsep):
+        os.environ["PATH"] = ffmpeg_dir + os.pathsep + current_path
+
+    if not shutil.which("ffmpeg"):
+        raise RuntimeError("FFmpeg nao foi localizado mesmo apos a instalacao automatica.")
+
+    print(f"FFmpeg pronto para uso: {ffmpeg_exe}")
+
+
+def ensure_torch_cuda() -> object:
+    torch = importlib.import_module("torch")
+    if torch.cuda.is_available():
+        return torch
+
+    gpu_name = get_nvidia_gpu_name()
+    if not gpu_name:
+        return torch
+
+    if os.environ.get("GENERAR_SRT_CUDA_ATTEMPTED") == "1":
+        print("GPU NVIDIA detectada, mas o PyTorch continua sem CUDA. Usando CPU nesta execucao.")
+        return torch
+
+    print(f"GPU NVIDIA detectada: {gpu_name}")
+    print("O PyTorch instalado e CPU-only. Tentando instalar uma versao com CUDA automaticamente...")
+    subprocess.check_call(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--upgrade",
+            "torch",
+            "--index-url",
+            "https://download.pytorch.org/whl/cu121",
+        ]
+    )
+    os.environ["GENERAR_SRT_CUDA_ATTEMPTED"] = "1"
+    script_path = str(Path(__file__).resolve())
+    restart_args = [sys.executable, script_path, *sys.argv[1:]]
+    raise SystemExit(subprocess.call(restart_args))
+
+
+def select_input_files() -> list[str]:
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    file_types = [
+        (
+            "Midia suportada",
+            "*.mp4 *.mkv *.mov *.avi *.wmv *.webm *.mp3 *.wav *.m4a *.flac *.aac",
+        ),
+        ("Todos os arquivos", "*.*"),
+    ]
+    selected = filedialog.askopenfilenames(title="Selecione um ou mais videos/audios", filetypes=file_types)
+    root.destroy()
+    return list(selected)
+
+
+def print_selected_files(input_paths: list[Path]) -> None:
+    # Mantido por compatibilidade; a exibicao principal usa a tabela colorida.
+    for index, input_path in enumerate(input_paths, start=1):
+        size_mb = input_path.stat().st_size / (1024 * 1024)
+        print(f"[{index}] {input_path.name} ({size_mb:.1f} MB)")
+
+
+def format_seconds(seconds: float | None) -> str:
+    if seconds is None:
+        return "N/A"
+    total = int(max(0, round(seconds)))
+    hours = total // 3600
+    minutes = (total % 3600) // 60
+    secs = total % 60
+    if hours:
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
+
+
+def get_media_duration_seconds(input_path: Path) -> float | None:
+    ffmpeg_bin = shutil.which("ffmpeg")
+    if not ffmpeg_bin:
+        return None
+
+    try:
+        proc = subprocess.run(
+            [ffmpeg_bin, "-i", str(input_path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+
+    text = (proc.stderr or "") + "\n" + (proc.stdout or "")
+    match = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", text)
+    if not match:
+        return None
+
+    hours = int(match.group(1))
+    minutes = int(match.group(2))
+    seconds = float(match.group(3))
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def default_speed_ratio(model_name: str, is_cuda: bool) -> float:
+    cuda_ratio = {
+        "tiny": 0.15,
+        "base": 0.25,
+        "small": 0.40,
+        "medium": 0.80,
+        "large": 1.40,
+    }
+    cpu_ratio = {
+        "tiny": 0.70,
+        "base": 1.20,
+        "small": 2.00,
+        "medium": 3.50,
+        "large": 6.00,
+    }
+    return (cuda_ratio if is_cuda else cpu_ratio).get(model_name, 2.0)
+
+
+def estimate_processing_seconds(duration_s: float | None, observed_ratios: list[float], model_name: str, is_cuda: bool) -> float | None:
+    if duration_s is None:
+        return None
+    ratio = (sum(observed_ratios) / len(observed_ratios)) if observed_ratios else default_speed_ratio(model_name, is_cuda)
+    return max(10.0, duration_s * ratio)
+
+
+def print_header(console: object, model_name: str, source: str, target: str, device: str) -> None:
+    from rich.panel import Panel
+
+    console.print(
+        Panel.fit(
+            f"[bold cyan]Gerador de SRT[/bold cyan]\n"
+            f"Modelo: [bold]{model_name}[/bold] | Origem: [bold]{source}[/bold] | Destino: [bold]{target}[/bold] | Dispositivo: [bold]{device.upper()}[/bold]",
+            border_style="bright_blue",
+        )
+    )
+
+
+def print_selected_files_table(console: object, input_paths: list[Path], durations: dict[Path, float | None], estimates: dict[Path, float | None]) -> None:
+    from rich.table import Table
+
+    table = Table(title="Arquivos Selecionados", header_style="bold magenta", show_lines=False)
+    table.add_column("#", justify="right", style="cyan")
+    table.add_column("Arquivo", style="white")
+    table.add_column("Tamanho", justify="right", style="green")
+    table.add_column("Duracao", justify="right", style="yellow")
+    table.add_column("Tempo previsto", justify="right", style="bright_blue")
+
+    for index, input_path in enumerate(input_paths, start=1):
+        size_mb = input_path.stat().st_size / (1024 * 1024)
+        table.add_row(
+            str(index),
+            input_path.name,
+            f"{size_mb:.1f} MB",
+            format_seconds(durations.get(input_path)),
+            format_seconds(estimates.get(input_path)),
+        )
+
+    console.print(table)
+
+
+def get_runtime_device(torch_module: object) -> tuple[str, bool]:
+    if torch_module.cuda.is_available():
+        return "cuda", True
+    return "cpu", False
+
+
+def process_file(
+    input_path: Path,
+    whisper_module: object,
+    translator: object,
+    model: object,
+    source_language: str,
+    output_base: str,
+    use_fp16: bool,
+    console: object,
+    predicted_seconds: float | None,
+) -> tuple[float, int]:
+    from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
+
+    console.print(f"\n[bold cyan]Iniciando:[/bold cyan] {input_path.name}")
+    if predicted_seconds is not None:
+        console.print(f"[bright_black]Tempo previsto: {format_seconds(predicted_seconds)}[/bright_black]")
+
+    started_at = time.perf_counter()
+
+    with Progress(
+        SpinnerColumn(style="cyan"),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(bar_width=None, complete_style="green", finished_style="bright_green"),
+        TaskProgressColumn(),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+        console=console,
+        transient=False,
+    ) as progress:
+        phases_task = progress.add_task(f"{input_path.name} - fases", total=3)
+
+        progress.update(phases_task, description=f"{input_path.name} - transcricao")
+        result = model.transcribe(str(input_path), language=source_language, fp16=use_fp16)
+        progress.update(phases_task, advance=1)
+
+        progress.update(phases_task, description=f"{input_path.name} - traducao")
+        segments = result.get("segments", [])
+        translation_task = progress.add_task(f"{input_path.name} - segmentos", total=max(1, len(segments)))
+        for segment in segments:
+            segment["text"] = translator.translate(segment["text"]) or segment["text"]
+            progress.update(translation_task, advance=1)
+        progress.update(phases_task, advance=1)
+        progress.remove_task(translation_task)
+
+        progress.update(phases_task, description=f"{input_path.name} - gravando SRT")
+        writer = whisper_module.utils.get_writer("srt", str(input_path.parent))
+        writer(result, output_base)
+        progress.update(phases_task, advance=1)
+
+    elapsed = time.perf_counter() - started_at
+    console.print(f"[bold green]Concluido:[/bold green] {input_path.parent / (output_base + '.srt')} ([yellow]{format_seconds(elapsed)}[/yellow])")
+    return elapsed, len(result.get("segments", []))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Gerar SRT de um MP4 e traduzir automaticamente.")
+    parser.add_argument("input", nargs="*", help="Caminho(s) do(s) arquivo(s) de video/audio")
+    parser.add_argument("--model", default="small", help="Modelo Whisper: tiny, base, small, medium, large")
+    parser.add_argument("--source", default="en", help="Idioma do áudio (ex: en)")
+    parser.add_argument("--target", default="pt", help="Idioma de tradução (ex: pt)")
+    parser.add_argument("--output", default=None, help="Nome base do arquivo de saída (sem extensão)")
+    args = parser.parse_args()
+
+    ensure_dependencies()
+    ensure_ffmpeg()
+
+    whisper = importlib.import_module("whisper")
+    GoogleTranslator = importlib.import_module("deep_translator").GoogleTranslator
+    torch = ensure_torch_cuda()
+    Console = importlib.import_module("rich.console").Console
+    console = Console(highlight=False)
+
+    selected_inputs = args.input if args.input else select_input_files()
+    if not selected_inputs:
+        print("Nenhum arquivo selecionado.")
+        return
+
+    input_paths = [Path(item).expanduser().resolve() for item in selected_inputs]
+    for input_path in input_paths:
+        if not input_path.exists():
+            raise FileNotFoundError(f"Arquivo nao encontrado: {input_path}")
+
+    if args.output and len(input_paths) > 1:
+        raise ValueError("Use --output apenas quando houver um unico arquivo de entrada.")
+
+    device, use_fp16 = get_runtime_device(torch)
+    gpu_name = torch.cuda.get_device_name(0) if device == "cuda" else "CPU"
+    print_header(console, args.model, args.source, args.target, device)
+    if device == "cuda":
+        console.print(f"[green]Usando GPU CUDA:[/green] {gpu_name}")
+    else:
+        console.print("[yellow]Usando CPU.[/yellow] Se voce tem GPU NVIDIA, o PyTorch instalado pode estar CPU-only.")
+
+    durations: dict[Path, float | None] = {item: get_media_duration_seconds(item) for item in input_paths}
+    observed_ratios: list[float] = []
+    estimates: dict[Path, float | None] = {
+        item: estimate_processing_seconds(durations.get(item), observed_ratios, args.model, device == "cuda")
+        for item in input_paths
+    }
+    print_selected_files_table(console, input_paths, durations, estimates)
+
+    model = whisper.load_model(args.model, device=device)
+    translator = GoogleTranslator(source=args.source, target=args.target)
+
+    for input_path in input_paths:
+        output_base = Path(args.output).stem if args.output else input_path.stem
+        predicted = estimate_processing_seconds(durations.get(input_path), observed_ratios, args.model, device == "cuda")
+        elapsed, _segments = process_file(
+            input_path=input_path,
+            whisper_module=whisper,
+            translator=translator,
+            model=model,
+            source_language=args.source,
+            output_base=output_base,
+            use_fp16=use_fp16,
+            console=console,
+            predicted_seconds=predicted,
+        )
+        file_duration = durations.get(input_path)
+        if file_duration and file_duration > 0:
+            observed_ratios.append(elapsed / file_duration)
+
+
+if __name__ == "__main__":
+    main()
