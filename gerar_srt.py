@@ -145,6 +145,27 @@ def choose_device_mode() -> str:
     return "cuda"
 
 
+def choose_source_language(default_language: str) -> str:
+    print("\nIdioma de origem do audio:")
+    print(f"  Enter) Ingles padrao ({default_language})")
+    print("  1) Japones (ja)")
+    print("  2) Espanhol (es)")
+    print("  3) Portugues (pt)")
+
+    try:
+        choice = input("Escolha Enter, 1, 2 ou 3: ").strip()
+    except EOFError:
+        return default_language
+
+    mapping = {
+        "": default_language,
+        "1": "ja",
+        "2": "es",
+        "3": "pt",
+    }
+    return mapping.get(choice, default_language)
+
+
 def select_input_files() -> list[str]:
     root = tk.Tk()
     root.withdraw()
@@ -341,6 +362,7 @@ def main() -> None:
     parser.add_argument("--target", default="pt", help="Idioma de tradução (ex: pt)")
     parser.add_argument("--output", default=None, help="Nome base do arquivo de saída (sem extensão)")
     parser.add_argument("--device", choices=["ask", "cuda", "cpu"], default="ask", help="Dispositivo: ask (pergunta 1/2), cuda ou cpu")
+    parser.add_argument("--source-menu", choices=["on", "off"], default="on", help="Menu de idioma: on (pergunta) ou off")
     args = parser.parse_args()
 
     ensure_dependencies()
@@ -349,6 +371,7 @@ def main() -> None:
     whisper = importlib.import_module("whisper")
     GoogleTranslator = importlib.import_module("deep_translator").GoogleTranslator
     selected_device_mode = choose_device_mode() if args.device == "ask" else args.device
+    selected_source = choose_source_language(args.source) if args.source_menu == "on" else args.source
     torch = ensure_torch_cuda() if selected_device_mode == "cuda" else importlib.import_module("torch")
     Console = importlib.import_module("rich.console").Console
     console = Console(highlight=False)
@@ -368,7 +391,7 @@ def main() -> None:
 
     device, use_fp16 = get_runtime_device(torch, selected_device_mode)
     gpu_name = torch.cuda.get_device_name(0) if device == "cuda" else "CPU"
-    print_header(console, args.model, args.source, args.target, device)
+    print_header(console, args.model, selected_source, args.target, device)
     if device == "cuda":
         console.print(f"[green]Usando GPU CUDA:[/green] {gpu_name}")
     else:
@@ -383,7 +406,7 @@ def main() -> None:
     print_selected_files_table(console, input_paths, durations, estimates)
 
     model = whisper.load_model(args.model, device=device)
-    translator = GoogleTranslator(source=args.source, target=args.target)
+    translator = GoogleTranslator(source=selected_source, target=args.target)
 
     for input_path in input_paths:
         output_base = Path(args.output).stem if args.output else input_path.stem
@@ -393,7 +416,7 @@ def main() -> None:
             whisper_module=whisper,
             translator=translator,
             model=model,
-            source_language=args.source,
+            source_language=selected_source,
             output_base=output_base,
             use_fp16=use_fp16,
             console=console,
