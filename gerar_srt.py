@@ -92,18 +92,39 @@ def ensure_torch_cuda() -> object:
 
     print(f"GPU NVIDIA detectada: {gpu_name}")
     print("O PyTorch instalado e CPU-only. Tentando instalar uma versao com CUDA automaticamente...")
-    subprocess.check_call(
-        [
-            sys.executable,
-            "-m",
-            "pip",
-            "install",
-            "--upgrade",
-            "torch",
-            "--index-url",
-            "https://download.pytorch.org/whl/cu121",
-        ]
-    )
+
+    cuda_indexes = [
+        "https://download.pytorch.org/whl/cu124",
+        "https://download.pytorch.org/whl/cu121",
+    ]
+
+    install_ok = False
+    for index_url in cuda_indexes:
+        try:
+            print(f"Tentando instalar torch com CUDA em: {index_url}")
+            subprocess.check_call(
+                [
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    "--upgrade",
+                    "--force-reinstall",
+                    "torch",
+                    "--index-url",
+                    index_url,
+                ]
+            )
+            install_ok = True
+            break
+        except subprocess.CalledProcessError:
+            print(f"Falha ao instalar torch via {index_url}.")
+
+    if not install_ok:
+        print("Nao foi possivel instalar PyTorch com CUDA automaticamente. Seguindo em CPU nesta execucao.")
+        os.environ["GENERAR_SRT_CUDA_ATTEMPTED"] = "1"
+        return torch
+
     os.environ["GENERAR_SRT_CUDA_ATTEMPTED"] = "1"
     script_path = str(Path(__file__).resolve())
     restart_args = [sys.executable, script_path, *sys.argv[1:]]

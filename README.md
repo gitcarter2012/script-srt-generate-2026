@@ -66,8 +66,8 @@ O script verifica e instala automaticamente (via pip), quando necessario:
 
 ## GPU
 Se houver uma GPU NVIDIA disponivel, o script tenta usar CUDA automaticamente.
-Se o PyTorch instalado for CPU-only, ele tenta instalar uma versao com CUDA.
-Se isso nao for possivel, o script avisa e continua em CPU.
+Se o PyTorch instalado for CPU-only, ele tenta instalar automaticamente uma versao CUDA (cu124 e cu121).
+Se nao for possivel (sem internet, permissao, ou incompatibilidade), o script avisa e continua em CPU.
 
 ## Observacao
 O script verifica FFmpeg no inicio. Se nao encontrar, ele instala automaticamente uma versao via imageio-ffmpeg e usa na execucao atual.
