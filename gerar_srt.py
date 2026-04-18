@@ -10,8 +10,6 @@ import time
 import tkinter as tk
 from tkinter import filedialog
 
-from tqdm import tqdm
-
 
 def ensure_dependencies() -> None:
     required = {
@@ -210,13 +208,15 @@ def get_media_duration_seconds(input_path: Path) -> float | None:
         proc = subprocess.run(
             [ffmpeg_bin, "-i", str(input_path)],
             capture_output=True,
-            text=True,
+            text=False,
             check=False,
         )
     except OSError:
         return None
 
-    text = (proc.stderr or "") + "\n" + (proc.stdout or "")
+    stderr_text = proc.stderr.decode("utf-8", errors="replace") if proc.stderr else ""
+    stdout_text = proc.stdout.decode("utf-8", errors="replace") if proc.stdout else ""
+    text = stderr_text + "\n" + stdout_text
     match = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", text)
     if not match:
         return None
