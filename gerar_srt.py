@@ -326,10 +326,42 @@ def split_segments_by_word_limit(segments: list[dict[str, object]], max_words: i
     return limited_segments
 
 
+def translate_text_with_retry(
+    translator: object,
+    text: str,
+    too_many_requests_error: type[Exception],
+    min_interval_seconds: float = 0.25,
+    max_retries: int = 8,
+) -> str:
+    stripped_text = text.strip()
+    if not stripped_text:
+        return text
+
+    wait_seconds = min_interval_seconds
+    for attempt in range(max_retries + 1):
+        if min_interval_seconds > 0:
+            time.sleep(min_interval_seconds)
+        try:
+            translated = translator.translate(stripped_text)
+            return translated or text
+        except Exception as exc:  # noqa: BLE001 - fallback controlado para manter o processo vivo.
+            if not isinstance(exc, too_many_requests_error):
+                raise
+
+            if attempt >= max_retries:
+                return text
+
+            time.sleep(wait_seconds)
+            wait_seconds = min(wait_seconds * 2, 8.0)
+
+    return text
+
+
 def process_file(
     input_path: Path,
     whisper_module: object,
     translator: object,
+    too_many_requests_error: type[Exception],
     model: object,
     source_language: str,
     output_base: str,
@@ -365,7 +397,12 @@ def process_file(
         segments = result.get("segments", [])
         translation_task = progress.add_task(f"{input_path.name} - segmentos", total=max(1, len(segments)))
         for segment in segments:
-            segment["text"] = translator.translate(segment["text"]) or segment["text"]
+            original_text = str(segment.get("text", ""))
+            segment["text"] = translate_text_with_retry(
+                translator=translator,
+                text=original_text,
+                too_many_requests_error=too_many_requests_error,
+            )
             progress.update(translation_task, advance=1)
         result["segments"] = split_segments_by_word_limit(segments)
         progress.update(phases_task, advance=1)
@@ -396,7 +433,10 @@ def main() -> None:
     ensure_ffmpeg()
 
     whisper = importlib.import_module("whisper")
-    GoogleTranslator = importlib.import_module("deep_translator").GoogleTranslator
+    deep_translator_module = importlib.import_module("deep_translator")
+    deep_translator_exceptions = importlib.import_module("deep_translator.exceptions")
+    GoogleTranslator = deep_translator_module.GoogleTranslator
+    TooManyRequests = deep_translator_exceptions.TooManyRequests
     selected_device_mode = choose_device_mode() if args.device == "ask" else args.device
     selected_source = choose_source_language(args.source) if args.source_menu == "on" else args.source
     torch = ensure_torch_cuda() if selected_device_mode == "cuda" else importlib.import_module("torch")
@@ -442,6 +482,7 @@ def main() -> None:
             input_path=input_path,
             whisper_module=whisper,
             translator=translator,
+            too_many_requests_error=TooManyRequests,
             model=model,
             source_language=selected_source,
             output_base=output_base,

@@ -29,6 +29,7 @@ O terminal mostra:
 - duracao de cada arquivo
 - tempo previsto por arquivo
 - barras de progresso por fase e traducao de segmentos
+- retentativas automaticas na traducao quando o servidor limitar requisicoes
 
 Tambem e possivel executar por duplo clique no arquivo executar_para_selecionar_videos.bat.
 
