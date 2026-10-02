@@ -5,6 +5,9 @@ Transcreve audio/video com Whisper, traduz e gera arquivos .srt.
 ## Arquivo principal
 - gerar_srt.py
 
+## Manutencao
+Consulte [docs/MAINTENANCE.md](docs/MAINTENANCE.md) para arquitetura, fluxo detalhado, contratos das integracoes, testes, limitacoes conhecidas e orientacoes para alteracoes futuras.
+
 ## Uso rapido
 Na pasta do projeto:
 
