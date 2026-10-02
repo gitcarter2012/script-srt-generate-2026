@@ -304,8 +304,10 @@ def split_segments_by_word_limit(segments: list[dict[str, object]], max_words: i
     limited_segments = []
     for segment in segments:
         words = str(segment.get("text", "")).split()
+        normalized_segment = segment.copy()
+        normalized_segment["text"] = " ".join(words)
         if len(words) <= max_words:
-            limited_segments.append(segment)
+            limited_segments.append(normalized_segment)
             continue
 
         start = float(segment["start"])
