@@ -494,6 +494,56 @@ def translate_segments_strict(
     return translated_segments
 
 
+def transcribe_with_rich_progress(
+    model: object,
+    input_path: Path,
+    source_language: str,
+    use_fp16: bool,
+    progress: object,
+) -> dict[str, object]:
+    whisper_transcribe_module = importlib.import_module("whisper.transcribe")
+    transcription_task = progress.add_task(
+        f"{input_path.name} - preparando transcricao original",
+        total=1,
+    )
+    original_tqdm = whisper_transcribe_module.tqdm.tqdm
+
+    class RichTranscriptionProgress:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            self.total = int(kwargs.get("total") or 1)
+            progress.update(
+                transcription_task,
+                total=self.total,
+                completed=0,
+                description=f"{input_path.name} - transcrevendo SRT original",
+            )
+
+        def __enter__(self) -> "RichTranscriptionProgress":
+            return self
+
+        def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> None:
+            if exc_type is None:
+                progress.update(
+                    transcription_task,
+                    completed=self.total,
+                    description=f"{input_path.name} - transcricao original concluida",
+                )
+
+        def update(self, frames: int) -> None:
+            progress.update(transcription_task, advance=frames)
+
+    whisper_transcribe_module.tqdm.tqdm = RichTranscriptionProgress
+    try:
+        return model.transcribe(
+            str(input_path),
+            language=source_language,
+            fp16=use_fp16,
+            verbose=False,
+        )
+    finally:
+        whisper_transcribe_module.tqdm.tqdm = original_tqdm
+
+
 def process_file(
     input_path: Path,
     whisper_module: object,
@@ -526,7 +576,13 @@ def process_file(
         phases_task = progress.add_task(f"{input_path.name} - fases", total=4)
 
         progress.update(phases_task, description=f"{input_path.name} - transcricao")
-        result = model.transcribe(str(input_path), language=source_language, fp16=use_fp16)
+        result = transcribe_with_rich_progress(
+            model=model,
+            input_path=input_path,
+            source_language=source_language,
+            use_fp16=use_fp16,
+            progress=progress,
+        )
         progress.update(phases_task, advance=1)
 
         segments = result.get("segments", [])

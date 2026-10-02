@@ -31,6 +31,7 @@ O terminal mostra:
 - duracao de cada arquivo
 - tempo previsto por arquivo
 - barras de progresso por fase e traducao de segmentos
+- progresso real em frames durante a transcricao do SRT original
 - provedor ativo e quantidade de segmentos traduzidos atualizados a cada lote
 - traducao em lotes reais para reduzir a quantidade de requisicoes
 - timeout e retentativas limitadas para evitar espera indefinida
