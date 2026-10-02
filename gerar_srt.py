@@ -338,6 +338,30 @@ def split_segments_by_word_limit(segments: list[dict[str, object]], max_words: i
     return limited_segments
 
 
+class FallbackTranslator:
+    def __init__(self, providers: list[tuple[str, Callable[[], object]]]) -> None:
+        self.providers = providers
+        self.disabled_providers: set[str] = set()
+
+    def translate(self, text: str) -> str:
+        errors = []
+        for provider_index, (provider_name, create_provider) in enumerate(self.providers):
+            if provider_name in self.disabled_providers:
+                continue
+            try:
+                return create_provider().translate(text)
+            except Exception as exc:  # noqa: BLE001 - Failover entre provedores externos.
+                errors.append(f"{provider_name}: {exc}")
+                has_fallback = provider_index + 1 < len(self.providers)
+                if has_fallback:
+                    self.disabled_providers.add(provider_name)
+                    print(f"Tradutor {provider_name} indisponivel. Alternando para outro provedor...")
+                    continue
+                raise RuntimeError("Provedor de traducao indisponivel: " + errors[-1]) from exc
+
+        raise RuntimeError("Todos os provedores de traducao estao indisponiveis: " + " | ".join(errors))
+
+
 def translate_text_strict(
     create_translator: Callable[[], object],
     text: str,
@@ -409,7 +433,7 @@ def translate_segments_strict(
     segments: list[dict[str, object]],
     create_translator: Callable[[], object],
     min_interval_seconds: float = 0.25,
-    max_batch_characters: int = 4000,
+    max_batch_characters: int = 450,
 ) -> list[dict[str, object]]:
     translated_segments = [segment.copy() for segment in segments]
     batch_indexes = []
@@ -528,6 +552,7 @@ def main() -> None:
     whisper = importlib.import_module("whisper")
     deep_translator_module = importlib.import_module("deep_translator")
     GoogleTranslator = deep_translator_module.GoogleTranslator
+    MyMemoryTranslator = deep_translator_module.MyMemoryTranslator
     selected_device_mode = choose_device_mode() if args.device == "ask" else args.device
     selected_source = choose_source_language(args.source) if args.source_menu == "on" else args.source
     torch = ensure_torch_cuda() if selected_device_mode == "cuda" else importlib.import_module("torch")
@@ -564,7 +589,27 @@ def main() -> None:
     print_selected_files_table(console, input_paths, durations, estimates)
 
     model = whisper.load_model(args.model, device=device)
-    create_translator = lambda: GoogleTranslator(source=selected_source, target=args.target)
+    mymemory_language_codes = {
+        "en": "en-GB",
+        "ja": "ja-JP",
+        "es": "es-ES",
+        "pt": "pt-PT",
+    }
+    providers: list[tuple[str, Callable[[], object]]] = [
+        ("Google", lambda: GoogleTranslator(source=selected_source, target=args.target)),
+    ]
+    if selected_source in mymemory_language_codes and args.target in mymemory_language_codes:
+        providers.append(
+            (
+                "MyMemory",
+                lambda: MyMemoryTranslator(
+                    source=mymemory_language_codes[selected_source],
+                    target=mymemory_language_codes[args.target],
+                ),
+            )
+        )
+    translator_pool = FallbackTranslator(providers)
+    create_translator = lambda: translator_pool
 
     for input_path in input_paths:
         output_base = Path(args.output).stem if args.output else input_path.stem

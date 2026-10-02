@@ -33,6 +33,7 @@ O terminal mostra:
 - barras de progresso por fase e traducao de segmentos
 - traducao em lotes reais para reduzir a quantidade de requisicoes
 - timeout e retentativas limitadas para evitar espera indefinida
+- troca automatica do Google para o MyMemory quando houver bloqueio de requisicoes
 
 Tambem e possivel executar por duplo clique no arquivo executar_para_selecionar_videos.bat.
 
