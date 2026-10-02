@@ -9,6 +9,7 @@ import sys
 import time
 import tkinter as tk
 from tkinter import filedialog
+from typing import Callable
 
 
 def ensure_dependencies() -> None:
@@ -326,41 +327,83 @@ def split_segments_by_word_limit(segments: list[dict[str, object]], max_words: i
     return limited_segments
 
 
-def translate_text_with_retry(
-    translator: object,
+def translate_text_strict(
+    create_translator: Callable[[], object],
     text: str,
     too_many_requests_error: type[Exception],
     min_interval_seconds: float = 0.25,
-    max_retries: int = 8,
+    initial_backoff_seconds: float = 1.0,
+    max_backoff_seconds: float = 60.0,
 ) -> str:
     stripped_text = text.strip()
     if not stripped_text:
         return text
 
-    wait_seconds = min_interval_seconds
-    for attempt in range(max_retries + 1):
+    backoff_seconds = initial_backoff_seconds
+    translator = create_translator()
+    while True:
         if min_interval_seconds > 0:
             time.sleep(min_interval_seconds)
         try:
             translated = translator.translate(stripped_text)
-            return translated or text
-        except Exception as exc:  # noqa: BLE001 - fallback controlado para manter o processo vivo.
-            if not isinstance(exc, too_many_requests_error):
-                raise
+            return (translated or stripped_text).strip()
+        except Exception as exc:  # noqa: BLE001 - Retentativa continua ate sucesso.
+            if isinstance(exc, too_many_requests_error):
+                time.sleep(backoff_seconds)
+                backoff_seconds = min(backoff_seconds * 2, max_backoff_seconds)
+                translator = create_translator()
+                continue
 
-            if attempt >= max_retries:
-                return text
+            time.sleep(backoff_seconds)
+            backoff_seconds = min(backoff_seconds * 2, max_backoff_seconds)
+            translator = create_translator()
 
-            time.sleep(wait_seconds)
-            wait_seconds = min(wait_seconds * 2, 8.0)
 
-    return text
+def translate_segments_strict(
+    segments: list[dict[str, object]],
+    create_translator: Callable[[], object],
+    too_many_requests_error: type[Exception],
+    min_interval_seconds: float = 0.25,
+    batch_size: int = 20,
+) -> list[dict[str, object]]:
+    translated_segments = [segment.copy() for segment in segments]
+    translator = create_translator()
+
+    for start_index in range(0, len(translated_segments), batch_size):
+        current_batch = translated_segments[start_index:start_index + batch_size]
+        batch_texts = [str(segment.get("text", "")).strip() for segment in current_batch]
+
+        if not any(batch_texts):
+            for segment in current_batch:
+                segment["text"] = str(segment.get("text", "")).strip()
+            continue
+
+        try:
+            if min_interval_seconds > 0:
+                time.sleep(min_interval_seconds)
+            translated_batch = translator.translate_batch(batch_texts)
+            if len(translated_batch) != len(current_batch):
+                raise RuntimeError("Quantidade de traducoes retornada difere da quantidade de segmentos.")
+
+            for segment, translated_text, original_text in zip(current_batch, translated_batch, batch_texts):
+                segment["text"] = (translated_text or original_text).strip()
+        except Exception:
+            # Se lote falhar, traduz cada segmento com retentativa continua.
+            for segment, original_text in zip(current_batch, batch_texts):
+                segment["text"] = translate_text_strict(
+                    create_translator=create_translator,
+                    text=original_text,
+                    too_many_requests_error=too_many_requests_error,
+                    min_interval_seconds=min_interval_seconds,
+                )
+
+    return translated_segments
 
 
 def process_file(
     input_path: Path,
     whisper_module: object,
-    translator: object,
+    create_translator: Callable[[], object],
     too_many_requests_error: type[Exception],
     model: object,
     source_language: str,
@@ -387,29 +430,35 @@ def process_file(
         console=console,
         transient=False,
     ) as progress:
-        phases_task = progress.add_task(f"{input_path.name} - fases", total=3)
+        phases_task = progress.add_task(f"{input_path.name} - fases", total=4)
 
         progress.update(phases_task, description=f"{input_path.name} - transcricao")
         result = model.transcribe(str(input_path), language=source_language, fp16=use_fp16)
         progress.update(phases_task, advance=1)
 
-        progress.update(phases_task, description=f"{input_path.name} - traducao")
         segments = result.get("segments", [])
+        writer = whisper_module.utils.get_writer("srt", str(input_path.parent))
+
+        progress.update(phases_task, description=f"{input_path.name} - gravando SRT original")
+        original_result = result.copy()
+        original_result["segments"] = split_segments_by_word_limit([segment.copy() for segment in segments])
+        writer(original_result, f"{output_base}_sem_traducao")
+        progress.update(phases_task, advance=1)
+
+        progress.update(phases_task, description=f"{input_path.name} - traducao")
         translation_task = progress.add_task(f"{input_path.name} - segmentos", total=max(1, len(segments)))
-        for segment in segments:
-            original_text = str(segment.get("text", ""))
-            segment["text"] = translate_text_with_retry(
-                translator=translator,
-                text=original_text,
-                too_many_requests_error=too_many_requests_error,
-            )
+        translated_segments = translate_segments_strict(
+            segments=segments,
+            create_translator=create_translator,
+            too_many_requests_error=too_many_requests_error,
+        )
+        for _ in translated_segments:
             progress.update(translation_task, advance=1)
-        result["segments"] = split_segments_by_word_limit(segments)
+        result["segments"] = split_segments_by_word_limit(translated_segments)
         progress.update(phases_task, advance=1)
         progress.remove_task(translation_task)
 
-        progress.update(phases_task, description=f"{input_path.name} - gravando SRT")
-        writer = whisper_module.utils.get_writer("srt", str(input_path.parent))
+        progress.update(phases_task, description=f"{input_path.name} - gravando SRT traduzido")
         writer(result, output_base)
         progress.update(phases_task, advance=1)
 
@@ -473,7 +522,7 @@ def main() -> None:
     print_selected_files_table(console, input_paths, durations, estimates)
 
     model = whisper.load_model(args.model, device=device)
-    translator = GoogleTranslator(source=selected_source, target=args.target)
+    create_translator = lambda: GoogleTranslator(source=selected_source, target=args.target)
 
     for input_path in input_paths:
         output_base = Path(args.output).stem if args.output else input_path.stem
@@ -481,7 +530,7 @@ def main() -> None:
         elapsed, _segments = process_file(
             input_path=input_path,
             whisper_module=whisper,
-            translator=translator,
+            create_translator=create_translator,
             too_many_requests_error=TooManyRequests,
             model=model,
             source_language=selected_source,
