@@ -300,6 +300,30 @@ def get_runtime_device(torch_module: object, preferred_mode: str) -> tuple[str, 
     return "cpu", False
 
 
+def split_segments_by_word_limit(segments: list[dict[str, object]], max_words: int = 5) -> list[dict[str, object]]:
+    limited_segments = []
+    for segment in segments:
+        words = str(segment.get("text", "")).split()
+        if len(words) <= max_words:
+            limited_segments.append(segment)
+            continue
+
+        start = float(segment["start"])
+        duration = float(segment["end"]) - start
+        word_offset = 0
+        for chunk_start in range(0, len(words), max_words):
+            chunk = words[chunk_start:chunk_start + max_words]
+            next_word_offset = word_offset + len(chunk)
+            chunk_segment = segment.copy()
+            chunk_segment["text"] = " ".join(chunk)
+            chunk_segment["start"] = start + duration * word_offset / len(words)
+            chunk_segment["end"] = start + duration * next_word_offset / len(words)
+            limited_segments.append(chunk_segment)
+            word_offset = next_word_offset
+
+    return limited_segments
+
+
 def process_file(
     input_path: Path,
     whisper_module: object,
@@ -341,6 +365,7 @@ def process_file(
         for segment in segments:
             segment["text"] = translator.translate(segment["text"]) or segment["text"]
             progress.update(translation_task, advance=1)
+        result["segments"] = split_segments_by_word_limit(segments)
         progress.update(phases_task, advance=1)
         progress.remove_task(translation_task)
 

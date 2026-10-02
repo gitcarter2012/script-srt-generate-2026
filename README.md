@@ -14,6 +14,7 @@ python .\gerar_srt.py
 
 Sem argumentos, o script abre uma janela para selecionar um ou varios arquivos.
 Para cada arquivo selecionado, o .srt e criado na mesma pasta do video/audio.
+Cada legenda tem no maximo cinco palavras; segmentos maiores sao divididos em novas legendas.
 Ao iniciar, o script pergunta no terminal:
 - 1 = com CUDA (GPU NVIDIA)
 - 2 = sem CUDA (CPU)
