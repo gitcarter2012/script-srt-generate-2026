@@ -342,6 +342,13 @@ class FallbackTranslator:
     def __init__(self, providers: list[tuple[str, Callable[[], object]]]) -> None:
         self.providers = providers
         self.disabled_providers: set[str] = set()
+        self.active_provider_name = providers[0][0] if providers else "indisponivel"
+
+    def next_provider_name(self) -> str:
+        for provider_name, _create_provider in self.providers:
+            if provider_name not in self.disabled_providers:
+                return provider_name
+        return "indisponivel"
 
     def translate(self, text: str) -> str:
         errors = []
@@ -349,7 +356,9 @@ class FallbackTranslator:
             if provider_name in self.disabled_providers:
                 continue
             try:
-                return create_provider().translate(text)
+                translated = create_provider().translate(text)
+                self.active_provider_name = provider_name
+                return translated
             except Exception as exc:  # noqa: BLE001 - Failover entre provedores externos.
                 errors.append(f"{provider_name}: {exc}")
                 has_fallback = provider_index + 1 < len(self.providers)
@@ -434,6 +443,8 @@ def translate_segments_strict(
     create_translator: Callable[[], object],
     min_interval_seconds: float = 0.25,
     max_batch_characters: int = 450,
+    on_batch_start: Callable[[int, str], None] | None = None,
+    on_batch_complete: Callable[[int, str], None] | None = None,
 ) -> list[dict[str, object]]:
     translated_segments = [segment.copy() for segment in segments]
     batch_indexes = []
@@ -444,9 +455,21 @@ def translate_segments_strict(
         nonlocal batch_indexes, batch_texts, batch_characters
         if not batch_texts:
             return
+        translator_pool = create_translator()
+        provider_name = (
+            translator_pool.next_provider_name()
+            if isinstance(translator_pool, FallbackTranslator)
+            else "provedor configurado"
+        )
+        if on_batch_start:
+            on_batch_start(len(batch_texts), provider_name)
         translations = translate_packed_batch(batch_texts, create_translator, min_interval_seconds)
         for segment_index, translated_text in zip(batch_indexes, translations):
             translated_segments[segment_index]["text"] = translated_text
+        if isinstance(translator_pool, FallbackTranslator):
+            provider_name = translator_pool.active_provider_name
+        if on_batch_complete:
+            on_batch_complete(len(batch_texts), provider_name)
         batch_indexes = []
         batch_texts = []
         batch_characters = 0
@@ -455,6 +478,8 @@ def translate_segments_strict(
         text = str(segment.get("text", "")).strip()
         if not text:
             segment["text"] = ""
+            if on_batch_complete:
+                on_batch_complete(1, "sem texto")
             continue
 
         estimated_characters = len(text) + 20
@@ -515,12 +540,31 @@ def process_file(
 
         progress.update(phases_task, description=f"{input_path.name} - traducao")
         translation_task = progress.add_task(f"{input_path.name} - segmentos", total=max(1, len(segments)))
+        translated_count = 0
+
+        def show_batch_start(batch_size: int, provider_name: str) -> None:
+            progress.update(
+                translation_task,
+                description=f"{input_path.name} - enviando {batch_size} segmentos ao {provider_name}",
+            )
+
+        def show_batch_complete(batch_size: int, provider_name: str) -> None:
+            nonlocal translated_count
+            translated_count += batch_size
+            progress.update(
+                translation_task,
+                advance=batch_size,
+                description=f"{input_path.name} - {translated_count}/{len(segments)} traduzidos via {provider_name}",
+            )
+
         translated_segments = translate_segments_strict(
             segments=segments,
             create_translator=create_translator,
+            on_batch_start=show_batch_start,
+            on_batch_complete=show_batch_complete,
         )
-        for _ in translated_segments:
-            progress.update(translation_task, advance=1)
+        if not segments:
+            progress.update(translation_task, completed=1, description=f"{input_path.name} - nenhum segmento para traduzir")
         result["segments"] = split_segments_by_word_limit(translated_segments)
         progress.update(phases_task, advance=1)
         progress.remove_task(translation_task)
