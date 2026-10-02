@@ -34,6 +34,17 @@ def ensure_dependencies() -> None:
     subprocess.check_call([sys.executable, "-m", "pip", "install", *missing_packages])
 
 
+def configure_translation_http_timeout(timeout_seconds: float = 15.0) -> None:
+    requests_module = importlib.import_module("requests")
+    original_get = requests_module.get
+
+    def get_with_timeout(*args: object, **kwargs: object) -> object:
+        kwargs.setdefault("timeout", timeout_seconds)
+        return original_get(*args, **kwargs)
+
+    requests_module.get = get_with_timeout
+
+
 def get_nvidia_gpu_name() -> str | None:
     try:
         result = subprocess.run(
@@ -330,72 +341,106 @@ def split_segments_by_word_limit(segments: list[dict[str, object]], max_words: i
 def translate_text_strict(
     create_translator: Callable[[], object],
     text: str,
-    too_many_requests_error: type[Exception],
     min_interval_seconds: float = 0.25,
     initial_backoff_seconds: float = 1.0,
-    max_backoff_seconds: float = 60.0,
+    max_retries: int = 2,
 ) -> str:
     stripped_text = text.strip()
     if not stripped_text:
         return text
 
     backoff_seconds = initial_backoff_seconds
-    translator = create_translator()
-    while True:
+    last_error = None
+    for attempt in range(max_retries + 1):
         if min_interval_seconds > 0:
             time.sleep(min_interval_seconds)
         try:
-            translated = translator.translate(stripped_text)
+            translated = create_translator().translate(stripped_text)
             return (translated or stripped_text).strip()
-        except Exception as exc:  # noqa: BLE001 - Retentativa continua ate sucesso.
-            if isinstance(exc, too_many_requests_error):
-                time.sleep(backoff_seconds)
-                backoff_seconds = min(backoff_seconds * 2, max_backoff_seconds)
-                translator = create_translator()
-                continue
-
+        except Exception as exc:  # noqa: BLE001 - O provedor pode falhar por rede ou limite.
+            last_error = exc
+            if attempt >= max_retries:
+                break
             time.sleep(backoff_seconds)
-            backoff_seconds = min(backoff_seconds * 2, max_backoff_seconds)
-            translator = create_translator()
+            backoff_seconds = min(backoff_seconds * 2, 8.0)
+
+    raise RuntimeError("Nao foi possivel traduzir um trecho apos varias tentativas.") from last_error
+
+
+def translate_packed_batch(
+    texts: list[str],
+    create_translator: Callable[[], object],
+    min_interval_seconds: float,
+) -> list[str]:
+    if len(texts) == 1:
+        return [translate_text_strict(create_translator, texts[0], min_interval_seconds)]
+
+    markers = [f"<SRT_{index:06d}>" for index in range(len(texts))]
+    packed_text = "\n".join(f"{marker}{text}" for marker, text in zip(markers, texts))
+
+    translated = translate_text_strict(create_translator, packed_text, min_interval_seconds)
+    try:
+        marker_pattern = re.compile(r"<\s*SRT_(\d{6})\s*>", re.IGNORECASE)
+        matches = list(marker_pattern.finditer(translated))
+        if len(matches) != len(texts):
+            raise ValueError("O tradutor alterou os marcadores do lote.")
+
+        translated_texts = []
+        for index, match in enumerate(matches):
+            expected_index = int(match.group(1))
+            if expected_index != index:
+                raise ValueError("O tradutor reordenou os marcadores do lote.")
+            text_start = match.end()
+            text_end = matches[index + 1].start() if index + 1 < len(matches) else len(translated)
+            translated_texts.append(translated[text_start:text_end].strip())
+
+        if any(not text for text in translated_texts):
+            raise ValueError("O tradutor retornou um segmento vazio.")
+        return translated_texts
+    except ValueError:
+        middle = len(texts) // 2
+        return (
+            translate_packed_batch(texts[:middle], create_translator, min_interval_seconds)
+            + translate_packed_batch(texts[middle:], create_translator, min_interval_seconds)
+        )
 
 
 def translate_segments_strict(
     segments: list[dict[str, object]],
     create_translator: Callable[[], object],
-    too_many_requests_error: type[Exception],
     min_interval_seconds: float = 0.25,
-    batch_size: int = 20,
+    max_batch_characters: int = 4000,
 ) -> list[dict[str, object]]:
     translated_segments = [segment.copy() for segment in segments]
-    translator = create_translator()
+    batch_indexes = []
+    batch_texts = []
+    batch_characters = 0
 
-    for start_index in range(0, len(translated_segments), batch_size):
-        current_batch = translated_segments[start_index:start_index + batch_size]
-        batch_texts = [str(segment.get("text", "")).strip() for segment in current_batch]
+    def flush_batch() -> None:
+        nonlocal batch_indexes, batch_texts, batch_characters
+        if not batch_texts:
+            return
+        translations = translate_packed_batch(batch_texts, create_translator, min_interval_seconds)
+        for segment_index, translated_text in zip(batch_indexes, translations):
+            translated_segments[segment_index]["text"] = translated_text
+        batch_indexes = []
+        batch_texts = []
+        batch_characters = 0
 
-        if not any(batch_texts):
-            for segment in current_batch:
-                segment["text"] = str(segment.get("text", "")).strip()
+    for segment_index, segment in enumerate(translated_segments):
+        text = str(segment.get("text", "")).strip()
+        if not text:
+            segment["text"] = ""
             continue
 
-        try:
-            if min_interval_seconds > 0:
-                time.sleep(min_interval_seconds)
-            translated_batch = translator.translate_batch(batch_texts)
-            if len(translated_batch) != len(current_batch):
-                raise RuntimeError("Quantidade de traducoes retornada difere da quantidade de segmentos.")
+        estimated_characters = len(text) + 20
+        if batch_texts and batch_characters + estimated_characters > max_batch_characters:
+            flush_batch()
+        batch_indexes.append(segment_index)
+        batch_texts.append(text)
+        batch_characters += estimated_characters
 
-            for segment, translated_text, original_text in zip(current_batch, translated_batch, batch_texts):
-                segment["text"] = (translated_text or original_text).strip()
-        except Exception:
-            # Se lote falhar, traduz cada segmento com retentativa continua.
-            for segment, original_text in zip(current_batch, batch_texts):
-                segment["text"] = translate_text_strict(
-                    create_translator=create_translator,
-                    text=original_text,
-                    too_many_requests_error=too_many_requests_error,
-                    min_interval_seconds=min_interval_seconds,
-                )
+    flush_batch()
 
     return translated_segments
 
@@ -404,7 +449,6 @@ def process_file(
     input_path: Path,
     whisper_module: object,
     create_translator: Callable[[], object],
-    too_many_requests_error: type[Exception],
     model: object,
     source_language: str,
     output_base: str,
@@ -450,7 +494,6 @@ def process_file(
         translated_segments = translate_segments_strict(
             segments=segments,
             create_translator=create_translator,
-            too_many_requests_error=too_many_requests_error,
         )
         for _ in translated_segments:
             progress.update(translation_task, advance=1)
@@ -480,12 +523,11 @@ def main() -> None:
 
     ensure_dependencies()
     ensure_ffmpeg()
+    configure_translation_http_timeout()
 
     whisper = importlib.import_module("whisper")
     deep_translator_module = importlib.import_module("deep_translator")
-    deep_translator_exceptions = importlib.import_module("deep_translator.exceptions")
     GoogleTranslator = deep_translator_module.GoogleTranslator
-    TooManyRequests = deep_translator_exceptions.TooManyRequests
     selected_device_mode = choose_device_mode() if args.device == "ask" else args.device
     selected_source = choose_source_language(args.source) if args.source_menu == "on" else args.source
     torch = ensure_torch_cuda() if selected_device_mode == "cuda" else importlib.import_module("torch")
@@ -531,7 +573,6 @@ def main() -> None:
             input_path=input_path,
             whisper_module=whisper,
             create_translator=create_translator,
-            too_many_requests_error=TooManyRequests,
             model=model,
             source_language=selected_source,
             output_base=output_base,
