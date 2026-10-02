@@ -9,7 +9,7 @@ Transcreve audio/video com Whisper, traduz e gera arquivos .srt.
 Na pasta do projeto:
 
 ```powershell
-py .\gerar_srt.py
+python .\gerar_srt.py
 ```
 
 Sem argumentos, o script abre uma janela para selecionar um ou varios arquivos.
@@ -35,13 +35,13 @@ Tambem e possivel executar por duplo clique no arquivo executar_para_selecionar_
 Um arquivo:
 
 ```powershell
-py .\gerar_srt.py .\Donations2.mp4
+python .\gerar_srt.py .\Donations2.mp4
 ```
 
 Multiplos arquivos:
 
 ```powershell
-py .\gerar_srt.py .\video1.mp4 .\video2.mp4
+python .\gerar_srt.py .\video1.mp4 .\video2.mp4
 ```
 
 Via .bat (com argumentos):
@@ -53,20 +53,20 @@ Via .bat (com argumentos):
 Com opcoes:
 
 ```powershell
-py .\gerar_srt.py .\Donations2.mp4 --model small --source en --target pt --output legenda_final
+python .\gerar_srt.py .\Donations2.mp4 --model small --source en --target pt --output legenda_final
 ```
 
 Definir dispositivo sem pergunta interativa:
 
 ```powershell
-py .\gerar_srt.py .\Donations2.mp4 --device cuda
-py .\gerar_srt.py .\Donations2.mp4 --device cpu
+python .\gerar_srt.py .\Donations2.mp4 --device cuda
+python .\gerar_srt.py .\Donations2.mp4 --device cpu
 ```
 
 Desativar menu de idioma e usar o valor de --source:
 
 ```powershell
-py .\gerar_srt.py .\Donations2.mp4 --source pt --source-menu off
+python .\gerar_srt.py .\Donations2.mp4 --source pt --source-menu off
 ```
 
 Observacao: use --output apenas com um unico arquivo de entrada.
