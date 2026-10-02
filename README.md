@@ -16,7 +16,7 @@ Sem argumentos, o script abre uma janela para selecionar um ou varios arquivos.
 Para cada arquivo selecionado, o .srt e criado na mesma pasta do video/audio.
 Antes da traducao, o script gera primeiro um arquivo original com sufixo _sem_traducao.
 Depois gera o arquivo final traduzido com o nome normal.
-Cada legenda tem no maximo cinco palavras; segmentos maiores sao divididos em novas legendas.
+Cada legenda tem no maximo oito palavras; segmentos maiores sao divididos em novas legendas.
 Ao iniciar, o script pergunta no terminal:
 - 1 = com CUDA (GPU NVIDIA)
 - 2 = sem CUDA (CPU)

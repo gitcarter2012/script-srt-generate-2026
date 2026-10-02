@@ -326,7 +326,7 @@ def get_runtime_device(torch_module: object, preferred_mode: str) -> tuple[str, 
     return "cpu", False
 
 
-def split_segments_by_word_limit(segments: list[dict[str, object]], max_words: int = 5) -> list[dict[str, object]]:
+def split_segments_by_word_limit(segments: list[dict[str, object]], max_words: int = 8) -> list[dict[str, object]]:
     limited_segments = []
     for segment in segments:
         words = str(segment.get("text", "")).split()

@@ -3,7 +3,7 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from gerar_srt import DeepLCloudTranslator, transcribe_with_rich_progress
+from gerar_srt import DeepLCloudTranslator, split_segments_by_word_limit, transcribe_with_rich_progress
 
 
 class FakeProgress:
@@ -44,6 +44,21 @@ class TranscriptionProgressTests(unittest.TestCase):
         self.assertEqual(sum(event.get("advance", 0) for event in progress.events), 100)
         self.assertEqual(progress.events[-1].get("completed"), 100)
         self.assertIs(transcribe_module.tqdm.tqdm, original_tqdm)
+
+
+class SubtitleWordLimitTests(unittest.TestCase):
+    def test_starts_new_caption_after_eight_words(self) -> None:
+        segments = [{
+            "start": 0.0,
+            "end": 9.0,
+            "text": "um dois tres quatro cinco seis sete oito nove",
+        }]
+
+        result = split_segments_by_word_limit(segments)
+
+        self.assertEqual(result[0]["text"], "um dois tres quatro cinco seis sete oito")
+        self.assertEqual(result[1]["text"], "nove")
+        self.assertEqual(result[0]["end"], result[1]["start"])
 
 
 class FakeResponse:
