@@ -35,7 +35,19 @@ O terminal mostra:
 - provedor ativo e quantidade de segmentos traduzidos atualizados a cada lote
 - traducao em lotes reais para reduzir a quantidade de requisicoes
 - timeout e retentativas limitadas para evitar espera indefinida
-- troca automatica do Google para o MyMemory quando houver bloqueio de requisicoes
+- traducao premium em portugues brasileiro pelo DeepL Cloud
+- lotes nativos do DeepL preservam cada fala separadamente
+
+## Traducao premium
+O script usa exclusivamente o DeepL Cloud para a traducao final. Crie uma chave de API no DeepL e escolha uma destas formas:
+
+```powershell
+$env:DEEPL_API_KEY = "sua-chave"
+python .\gerar_srt.py
+```
+
+Se `DEEPL_API_KEY` nao estiver definida, o terminal solicita a chave com entrada oculta. A chave nao e gravada no projeto.
+Contas DeepL API Free e DeepL API Pro sao detectadas automaticamente.
 
 Tambem e possivel executar por duplo clique no arquivo executar_para_selecionar_videos.bat.
 
@@ -89,7 +101,7 @@ Observacao: use --output apenas com um unico arquivo de entrada.
 ## Dependencias
 O script verifica e instala automaticamente (via pip), quando necessario:
 - openai-whisper
-- deep-translator
+- requests (cliente da API DeepL Cloud)
 - imageio-ffmpeg (usado para disponibilizar FFmpeg automaticamente quando nao existir no sistema)
 - rich (interface colorida no terminal)
 

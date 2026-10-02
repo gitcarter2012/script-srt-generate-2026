@@ -1,4 +1,5 @@
 import argparse
+import getpass
 import importlib
 import os
 from pathlib import Path
@@ -15,8 +16,8 @@ from typing import Callable
 def ensure_dependencies() -> None:
     required = {
         "whisper": "openai-whisper",
-        "deep_translator": "deep-translator",
         "imageio_ffmpeg": "imageio-ffmpeg",
+        "requests": "requests",
         "rich": "rich",
     }
     missing_packages = []
@@ -43,6 +44,19 @@ def configure_translation_http_timeout(timeout_seconds: float = 15.0) -> None:
         return original_get(*args, **kwargs)
 
     requests_module.get = get_with_timeout
+
+
+def get_deepl_api_key() -> str:
+    api_key = os.environ.get("DEEPL_API_KEY", "").strip()
+    if api_key:
+        return api_key
+
+    api_key = getpass.getpass("Chave da API DeepL (entrada oculta): ").strip()
+    if not api_key:
+        raise RuntimeError(
+            "A traducao premium exige uma chave DeepL. Defina DEEPL_API_KEY ou informe a chave ao iniciar."
+        )
+    return api_key
 
 
 def get_nvidia_gpu_name() -> str | None:
@@ -338,37 +352,44 @@ def split_segments_by_word_limit(segments: list[dict[str, object]], max_words: i
     return limited_segments
 
 
-class FallbackTranslator:
-    def __init__(self, providers: list[tuple[str, Callable[[], object]]]) -> None:
-        self.providers = providers
-        self.disabled_providers: set[str] = set()
-        self.active_provider_name = providers[0][0] if providers else "indisponivel"
-
-    def next_provider_name(self) -> str:
-        for provider_name, _create_provider in self.providers:
-            if provider_name not in self.disabled_providers:
-                return provider_name
-        return "indisponivel"
+class DeepLCloudTranslator:
+    def __init__(self, api_key: str, source_language: str, target_language: str) -> None:
+        self.api_key = api_key
+        self.source_language = source_language.upper()
+        self.target_language = "PT-BR" if target_language.lower() == "pt" else target_language.upper()
+        self.api_url = (
+            "https://api-free.deepl.com/v2/translate"
+            if api_key.endswith(":fx")
+            else "https://api.deepl.com/v2/translate"
+        )
 
     def translate(self, text: str) -> str:
-        errors = []
-        for provider_index, (provider_name, create_provider) in enumerate(self.providers):
-            if provider_name in self.disabled_providers:
-                continue
-            try:
-                translated = create_provider().translate(text)
-                self.active_provider_name = provider_name
-                return translated
-            except Exception as exc:  # noqa: BLE001 - Failover entre provedores externos.
-                errors.append(f"{provider_name}: {exc}")
-                has_fallback = provider_index + 1 < len(self.providers)
-                if has_fallback:
-                    self.disabled_providers.add(provider_name)
-                    print(f"Tradutor {provider_name} indisponivel. Alternando para outro provedor...")
-                    continue
-                raise RuntimeError("Provedor de traducao indisponivel: " + errors[-1]) from exc
+        return self.translate_many([text])[0]
 
-        raise RuntimeError("Todos os provedores de traducao estao indisponiveis: " + " | ".join(errors))
+    def translate_many(self, texts: list[str]) -> list[str]:
+        requests_module = importlib.import_module("requests")
+        response = requests_module.post(
+            self.api_url,
+            headers={"Authorization": f"DeepL-Auth-Key {self.api_key}"},
+            data={
+                "text": texts,
+                "source_lang": self.source_language,
+                "target_lang": self.target_language,
+                "preserve_formatting": "1",
+                "formality": "prefer_more",
+            },
+            timeout=30,
+        )
+        if response.status_code == 403:
+            raise RuntimeError("Chave DeepL invalida ou sem permissao para traducao.")
+        if response.status_code == 456:
+            raise RuntimeError("Cota mensal da conta DeepL esgotada.")
+        response.raise_for_status()
+        translations = response.json().get("translations", [])
+        translated_texts = [str(item.get("text", "")).strip() for item in translations]
+        if len(translated_texts) != len(texts) or any(not text for text in translated_texts):
+            raise RuntimeError("DeepL nao retornou todas as traducoes esperadas.")
+        return translated_texts
 
 
 def translate_text_strict(
@@ -405,6 +426,21 @@ def translate_packed_batch(
     create_translator: Callable[[], object],
     min_interval_seconds: float,
 ) -> list[str]:
+    translator = create_translator()
+    if hasattr(translator, "translate_many"):
+        last_error = None
+        for attempt in range(3):
+            if min_interval_seconds > 0:
+                time.sleep(min_interval_seconds)
+            try:
+                return translator.translate_many(texts)
+            except Exception as exc:  # noqa: BLE001 - Retentativa da API cloud.
+                last_error = exc
+                if attempt < 2:
+                    time.sleep(2 ** attempt)
+                    translator = create_translator()
+        raise RuntimeError("DeepL Cloud falhou apos tres tentativas.") from last_error
+
     if len(texts) == 1:
         return [translate_text_strict(create_translator, texts[0], min_interval_seconds)]
 
@@ -442,7 +478,8 @@ def translate_segments_strict(
     segments: list[dict[str, object]],
     create_translator: Callable[[], object],
     min_interval_seconds: float = 0.25,
-    max_batch_characters: int = 450,
+    max_batch_characters: int = 12000,
+    max_batch_items: int = 50,
     on_batch_start: Callable[[int, str], None] | None = None,
     on_batch_complete: Callable[[int, str], None] | None = None,
 ) -> list[dict[str, object]]:
@@ -455,19 +492,12 @@ def translate_segments_strict(
         nonlocal batch_indexes, batch_texts, batch_characters
         if not batch_texts:
             return
-        translator_pool = create_translator()
-        provider_name = (
-            translator_pool.next_provider_name()
-            if isinstance(translator_pool, FallbackTranslator)
-            else "provedor configurado"
-        )
+        provider_name = "DeepL Cloud"
         if on_batch_start:
             on_batch_start(len(batch_texts), provider_name)
         translations = translate_packed_batch(batch_texts, create_translator, min_interval_seconds)
         for segment_index, translated_text in zip(batch_indexes, translations):
             translated_segments[segment_index]["text"] = translated_text
-        if isinstance(translator_pool, FallbackTranslator):
-            provider_name = translator_pool.active_provider_name
         if on_batch_complete:
             on_batch_complete(len(batch_texts), provider_name)
         batch_indexes = []
@@ -483,7 +513,10 @@ def translate_segments_strict(
             continue
 
         estimated_characters = len(text) + 20
-        if batch_texts and batch_characters + estimated_characters > max_batch_characters:
+        if batch_texts and (
+            batch_characters + estimated_characters > max_batch_characters
+            or len(batch_texts) >= max_batch_items
+        ):
             flush_batch()
         batch_indexes.append(segment_index)
         batch_texts.append(text)
@@ -650,9 +683,7 @@ def main() -> None:
     configure_translation_http_timeout()
 
     whisper = importlib.import_module("whisper")
-    deep_translator_module = importlib.import_module("deep_translator")
-    GoogleTranslator = deep_translator_module.GoogleTranslator
-    MyMemoryTranslator = deep_translator_module.MyMemoryTranslator
+    deepl_api_key = get_deepl_api_key()
     selected_device_mode = choose_device_mode() if args.device == "ask" else args.device
     selected_source = choose_source_language(args.source) if args.source_menu == "on" else args.source
     torch = ensure_torch_cuda() if selected_device_mode == "cuda" else importlib.import_module("torch")
@@ -689,27 +720,11 @@ def main() -> None:
     print_selected_files_table(console, input_paths, durations, estimates)
 
     model = whisper.load_model(args.model, device=device)
-    mymemory_language_codes = {
-        "en": "en-GB",
-        "ja": "ja-JP",
-        "es": "es-ES",
-        "pt": "pt-PT",
-    }
-    providers: list[tuple[str, Callable[[], object]]] = [
-        ("Google", lambda: GoogleTranslator(source=selected_source, target=args.target)),
-    ]
-    if selected_source in mymemory_language_codes and args.target in mymemory_language_codes:
-        providers.append(
-            (
-                "MyMemory",
-                lambda: MyMemoryTranslator(
-                    source=mymemory_language_codes[selected_source],
-                    target=mymemory_language_codes[args.target],
-                ),
-            )
-        )
-    translator_pool = FallbackTranslator(providers)
-    create_translator = lambda: translator_pool
+    create_translator = lambda: DeepLCloudTranslator(
+        api_key=deepl_api_key,
+        source_language=selected_source,
+        target_language=args.target,
+    )
 
     for input_path in input_paths:
         output_base = Path(args.output).stem if args.output else input_path.stem
