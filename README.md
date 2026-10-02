@@ -39,14 +39,23 @@ O terminal mostra:
 - lotes nativos do DeepL preservam cada fala separadamente
 
 ## Traducao premium
-O script usa exclusivamente o DeepL Cloud para a traducao final. Crie uma chave de API no DeepL e escolha uma destas formas:
+O script usa exclusivamente o DeepL Cloud para a traducao final. Crie uma chave de API no DeepL e preencha o arquivo `config.json`:
+
+```json
+{
+	"deepl_api_key": "sua-chave"
+}
+```
+
+O `config.json` faz parte do repositorio e sera incluido nos commits e pushes. Como solicitado, a chave salva nele ficara visivel no historico Git.
+Tambem e possivel usar a variavel de ambiente:
 
 ```powershell
 $env:DEEPL_API_KEY = "sua-chave"
 python .\gerar_srt.py
 ```
 
-Se `DEEPL_API_KEY` nao estiver definida, o terminal solicita a chave com entrada oculta. A chave nao e gravada no projeto.
+Se a chave nao estiver no `config.json` nem em `DEEPL_API_KEY`, o terminal a solicita com entrada oculta.
 Contas DeepL API Free e DeepL API Pro sao detectadas automaticamente.
 
 Tambem e possivel executar por duplo clique no arquivo executar_para_selecionar_videos.bat.

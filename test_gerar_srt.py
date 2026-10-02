@@ -1,9 +1,10 @@
 import importlib
 from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
-from gerar_srt import DeepLCloudTranslator, split_segments_by_word_limit, transcribe_with_rich_progress
+from gerar_srt import DeepLCloudTranslator, get_deepl_api_key, split_segments_by_word_limit, transcribe_with_rich_progress
 
 
 class FakeProgress:
@@ -110,6 +111,24 @@ class DeepLCloudTranslatorTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "Cota mensal"):
             translator.translate("Hello")
+
+
+class DeepLConfigTests(unittest.TestCase):
+    @patch.dict("os.environ", {"DEEPL_API_KEY": "environment-key"})
+    def test_config_key_has_priority_over_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            config_path = Path(temporary_directory) / "config.json"
+            config_path.write_text('{"deepl_api_key": "config-key"}', encoding="utf-8")
+
+            self.assertEqual(get_deepl_api_key(config_path), "config-key")
+
+    def test_reports_invalid_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            config_path = Path(temporary_directory) / "config.json"
+            config_path.write_text("{invalid", encoding="utf-8")
+
+            with self.assertRaisesRegex(RuntimeError, "Nao foi possivel ler config.json"):
+                get_deepl_api_key(config_path)
 
 
 if __name__ == "__main__":
