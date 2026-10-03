@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from gerar_srt import DeepLCloudTranslator, get_deepl_api_key, split_segments_by_word_limit, translate_packed_batch
+from srt_generator.cli import choose_source_language
 from srt_generator.runtime import choose_execution_profile, configure_huggingface_downloads
 from srt_generator.subtitles import write_srt
 from srt_generator.transcription import FasterWhisperTranscriber, LegacyWhisperTranscriber
@@ -61,6 +62,16 @@ class FakeLegacyModel:
 
 
 class ExecutionProfileTests(unittest.TestCase):
+    def test_language_menu_does_not_treat_profile_number_as_japanese(self) -> None:
+        with patch("builtins.input", return_value="1"), patch("builtins.print"):
+            self.assertEqual(choose_source_language("en"), "en")
+
+    def test_language_menu_uses_unambiguous_letters(self) -> None:
+        expected = {"": "en", "J": "ja", "s": "es", "P": "pt"}
+        for choice, language in expected.items():
+            with self.subTest(choice=choice), patch("builtins.input", return_value=choice), patch("builtins.print"):
+                self.assertEqual(choose_source_language("en"), language)
+
     def test_maps_all_execution_profiles(self) -> None:
         expected = {
             "": ("faster", "auto"),
@@ -187,6 +198,7 @@ class TranscriptionProgressTests(unittest.TestCase):
         transcriber = LegacyWhisperTranscriber.__new__(LegacyWhisperTranscriber)
         transcriber.model = model
         transcriber.device = "cpu"
+        transcriber._speech_clip_timestamps = Mock(return_value=[1.0, 2.0, 4.0, 5.0])
 
         result = transcriber.transcribe(
             Path("video.mp4"),
@@ -199,8 +211,27 @@ class TranscriptionProgressTests(unittest.TestCase):
         self.assertIs(whisper_transcribe.tqdm.tqdm, original_tqdm)
         self.assertFalse(model.transcribe_kwargs["fp16"])
         self.assertFalse(model.transcribe_kwargs["word_timestamps"])
+        self.assertEqual(model.transcribe_kwargs["clip_timestamps"], [1.0, 2.0, 4.0, 5.0])
         self.assertFalse(model.transcribe_kwargs["condition_on_previous_text"])
         self.assertEqual(model.transcribe_kwargs["beam_size"], 5)
+
+    def test_legacy_whisper_skips_transcription_without_detected_speech(self) -> None:
+        model = Mock()
+        progress_events = []
+        transcriber = LegacyWhisperTranscriber.__new__(LegacyWhisperTranscriber)
+        transcriber.model = model
+        transcriber.device = "cpu"
+        transcriber._speech_clip_timestamps = Mock(return_value=[])
+
+        result = transcriber.transcribe(
+            Path("silence.mp4"),
+            "en",
+            lambda current, total: progress_events.append((current, total)),
+        )
+
+        self.assertEqual(result, [])
+        model.transcribe.assert_not_called()
+        self.assertEqual(progress_events, [(1.0, 1.0)])
 
 
 class SubtitleWordLimitTests(unittest.TestCase):

@@ -45,6 +45,7 @@ def ensure_transcription_dependencies(engine: str, preferred_mode: str) -> None:
         "whisper": "openai-whisper",
         "imageio_ffmpeg": "imageio-ffmpeg",
         "torch": "torch",
+        "faster_whisper": "faster-whisper==1.2.1",
     }
     missing_packages = []
     for module_name, package_name in legacy_dependencies.items():

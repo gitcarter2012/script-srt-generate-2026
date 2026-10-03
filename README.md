@@ -19,6 +19,8 @@ O primeiro menu apresenta quatro perfis:
 3. Whisper antigo + GPU NVIDIA: boa qualidade com `medium` e compatibilidade com o fluxo antigo;
 4. Whisper antigo + CPU: boa qualidade e maxima compatibilidade, mas muito lento.
 
+No menu seguinte, pressione `Enter` para audio em ingles. Os demais idiomas usam letras (`J`, `S`, `P`) para nao serem confundidos com os numeros do menu de motor.
+
 Para cada `video.mp4`, o script grava na mesma pasta:
 
 - `video_sem_traducao.srt`: transcricao original;
@@ -36,7 +38,7 @@ O script sempre instala automaticamente:
 Depois da escolha, instala apenas o backend necessario:
 
 - faster-whisper: `faster-whisper==1.2.1`, CTranslate2 e PyAV;
-- Whisper antigo: `openai-whisper`, PyTorch e `imageio-ffmpeg`.
+- Whisper antigo: `openai-whisper`, PyTorch, `imageio-ffmpeg` e o detector Silero VAD do faster-whisper.
 
 O modelo tambem e baixado automaticamente. O faster-whisper usa `large-v3` por padrao e guarda o cache em `%LOCALAPPDATA%\generate-srt\models`. O Whisper antigo usa `medium` por padrao.
 
@@ -53,6 +55,8 @@ No modo automatico, o script detecta a GPU com `nvidia-smi`:
 No Windows com NVIDIA, o script tenta instalar `nvidia-cublas-cu12` e `nvidia-cudnn-cu12` quando necessario. O driver NVIDIA deve estar instalado pelo fabricante; o script nao instala drivers do sistema.
 
 Para o Whisper antigo com GPU, o script instala uma build CUDA compativel do PyTorch e reinicia automaticamente para carregar as novas DLLs. Se CUDA nao ficar disponivel, continua em CPU.
+
+Os dois motores usam Silero VAD para ignorar intervalos sem voz. No Whisper antigo, somente esses intervalos sao enviados ao modelo, reduzindo alucinacoes em silencio e o tempo de processamento.
 
 ## Chave DeepL
 

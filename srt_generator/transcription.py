@@ -140,6 +140,29 @@ class LegacyWhisperTranscriber:
         self.compute_type = "float16" if device == "cuda" else "float32"
         self.model = whisper.load_model(model_name, device=device)
 
+    @staticmethod
+    def _speech_clip_timestamps(input_path: Path) -> list[float]:
+        import whisper
+        from faster_whisper.vad import VadOptions, get_speech_timestamps
+
+        sampling_rate = 16000
+        audio = whisper.load_audio(str(input_path), sr=sampling_rate)
+        speech_chunks = get_speech_timestamps(
+            audio,
+            VadOptions(
+                threshold=0.6,
+                min_speech_duration_ms=250,
+                min_silence_duration_ms=500,
+                speech_pad_ms=300,
+            ),
+            sampling_rate=sampling_rate,
+        )
+        return [
+            timestamp / sampling_rate
+            for chunk in speech_chunks
+            for timestamp in (chunk["start"], chunk["end"])
+        ]
+
     def transcribe(
         self,
         input_path: Path,
@@ -147,6 +170,11 @@ class LegacyWhisperTranscriber:
         on_progress: Callable[[float, float], None] | None = None,
     ) -> list[dict[str, object]]:
         whisper_transcribe = importlib.import_module("whisper.transcribe")
+        clip_timestamps = self._speech_clip_timestamps(input_path)
+        if not clip_timestamps:
+            if on_progress:
+                on_progress(1.0, 1.0)
+            return []
 
         original_tqdm = whisper_transcribe.tqdm.tqdm
 
@@ -182,6 +210,7 @@ class LegacyWhisperTranscriber:
                 compression_ratio_threshold=2.4,
                 logprob_threshold=-1.0,
                 no_speech_threshold=0.6,
+                clip_timestamps=clip_timestamps,
             )
         finally:
             whisper_transcribe.tqdm.tqdm = original_tqdm

@@ -16,14 +16,14 @@ from .runtime import (
 def choose_source_language(default_language: str) -> str:
     print("\nIdioma de origem do audio:")
     print(f"  Enter) Ingles padrao ({default_language})")
-    print("  1) Japones (ja)")
-    print("  2) Espanhol (es)")
-    print("  3) Portugues (pt)")
+    print("  J) Japones (ja)")
+    print("  S) Espanhol (es)")
+    print("  P) Portugues (pt)")
     try:
-        choice = input("Escolha Enter, 1, 2 ou 3: ").strip()
+        choice = input("Escolha Enter, J, S ou P: ").strip().lower()
     except EOFError:
         return default_language
-    return {"": default_language, "1": "ja", "2": "es", "3": "pt"}.get(choice, default_language)
+    return {"": default_language, "j": "ja", "s": "es", "p": "pt"}.get(choice, default_language)
 
 
 def select_input_files() -> list[str]:

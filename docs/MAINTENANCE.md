@@ -32,7 +32,7 @@ flowchart TD
 `ensure_dependencies()` instala somente `requests` e `rich`. Apos o primeiro menu, `ensure_transcription_dependencies()` instala o backend selecionado com o mesmo interpretador:
 
 - `faster`: `faster-whisper==1.2.1`, que traz CTranslate2 e usa PyAV;
-- `legacy`: `openai-whisper`, PyTorch e `imageio-ffmpeg`.
+- `legacy`: `openai-whisper`, PyTorch, `imageio-ffmpeg` e `faster-whisper` para Silero VAD.
 
 O menu retorna um par `(engine, preferred_mode)` para quatro perfis: faster GPU automatica, faster CPU, legado GPU e legado CPU. Via CLI, `--engine` e `--device` evitam o menu.
 
@@ -49,7 +49,7 @@ No Windows, `try_install_nvidia_runtime()` tenta instalar cuBLAS CUDA 12 e cuDNN
 
 `FasterWhisperTranscriber` protege tanto o carregamento quanto o consumo do gerador lazy. Se cuBLAS, cuDNN ou CUDA falharem no primeiro `encode`, prepara o runtime, recria o modelo e tenta GPU uma vez. Se ainda falhar, reinicia a transcricao em CPU int8. O modelo e baixado para `%LOCALAPPDATA%/generate-srt/models` e reutilizado.
 
-No motor legado, `ensure_legacy_torch_cuda()` tenta builds PyTorch `cu128`, `cu126` e `cu124`. Depois de trocar a build, reinicia o processo para que as DLLs CUDA sejam carregadas. `configure_legacy_ffmpeg()` disponibiliza o executavel do `imageio-ffmpeg` no `PATH` da execucao. Esse adaptador usa timestamps por segmento: ativar `word_timestamps` no Windows aciona os fallbacks DTW e mediana sem Triton e torna o processamento muito mais lento.
+No motor legado, `ensure_legacy_torch_cuda()` tenta builds PyTorch `cu128`, `cu126` e `cu124`. Depois de trocar a build, reinicia o processo para que as DLLs CUDA sejam carregadas. `configure_legacy_ffmpeg()` disponibiliza o executavel do `imageio-ffmpeg` no `PATH` da execucao. Esse adaptador usa Silero VAD para montar `clip_timestamps` e processar somente intervalos com voz. Ele usa timestamps por segmento: ativar `word_timestamps` no Windows aciona os fallbacks DTW e mediana sem Triton e torna o processamento muito mais lento.
 
 ## Transcricao
 
@@ -57,14 +57,15 @@ O faster-whisper usa `large-v3` por padrao e o legado usa `medium`. Ambos recebe
 
 - idioma de origem explicito;
 - `beam_size=5`;
-- timestamps por palavra;
 - `condition_on_previous_text=False`;
 - temperaturas `0.0`, `0.2` e `0.4`;
 - limites de compressao, probabilidade, silencio e alucinacao.
 
-O faster-whisper tambem usa Silero VAD e devolve um gerador lazy. `transcribe()` deve consumi-lo para que o trabalho aconteca. Cada segmento e normalizado para dicionarios independentes da biblioteca. O progresso e calculado por `segment.end / info.duration`.
+O faster-whisper usa timestamps por palavra, Silero VAD e devolve um gerador lazy. `transcribe()` deve consumi-lo para que o trabalho aconteca. Cada segmento e normalizado para dicionarios independentes da biblioteca. O progresso e calculado por `segment.end / info.duration`.
 
-`LegacyWhisperTranscriber` preserva a chamada do OpenAI Whisper anterior e adapta temporariamente seu `tqdm` interno para o callback Rich. O objeto original e restaurado em `finally`.
+`LegacyWhisperTranscriber` detecta voz antes da transcricao, converte os intervalos em `clip_timestamps` e nao chama o modelo quando nao ha fala. Ele preserva timestamps por segmento para evitar o fallback DTW lento no Windows e adapta temporariamente seu `tqdm` interno para o callback Rich. O objeto original e restaurado em `finally`.
+
+O menu de idioma usa letras para impedir que um numero repetido do menu de execucao altere o idioma acidentalmente: `Enter` mantem ingles, `J` seleciona japones, `S` espanhol e `P` portugues.
 
 ## Legendas
 
