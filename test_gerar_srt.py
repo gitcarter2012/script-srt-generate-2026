@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from gerar_srt import DeepLCloudTranslator, get_deepl_api_key, split_segments_by_word_limit, transcribe_with_rich_progress
+from gerar_srt import DeepLCloudTranslator, get_deepl_api_key, split_segments_by_word_limit, transcribe_with_rich_progress, translate_packed_batch
 
 
 class FakeProgress:
@@ -19,7 +19,11 @@ class FakeProgress:
 
 
 class FakeModel:
+    def __init__(self) -> None:
+        self.transcribe_kwargs = {}
+
     def transcribe(self, *args: object, **kwargs: object) -> dict[str, object]:
+        self.transcribe_kwargs = kwargs
         transcribe_module = importlib.import_module("whisper.transcribe")
         with transcribe_module.tqdm.tqdm(total=100, unit="frames", disable=False) as progress:
             progress.update(40)
@@ -30,11 +34,12 @@ class FakeModel:
 class TranscriptionProgressTests(unittest.TestCase):
     def test_reports_whisper_frame_progress(self) -> None:
         progress = FakeProgress()
+        model = FakeModel()
         transcribe_module = importlib.import_module("whisper.transcribe")
         original_tqdm = transcribe_module.tqdm.tqdm
 
         result = transcribe_with_rich_progress(
-            model=FakeModel(),
+            model=model,
             input_path=Path("video.mp4"),
             source_language="en",
             use_fp16=False,
@@ -45,6 +50,11 @@ class TranscriptionProgressTests(unittest.TestCase):
         self.assertEqual(sum(event.get("advance", 0) for event in progress.events), 100)
         self.assertEqual(progress.events[-1].get("completed"), 100)
         self.assertIs(transcribe_module.tqdm.tqdm, original_tqdm)
+        self.assertTrue(model.transcribe_kwargs["word_timestamps"])
+        self.assertFalse(model.transcribe_kwargs["condition_on_previous_text"])
+        self.assertEqual(model.transcribe_kwargs["hallucination_silence_threshold"], 2.0)
+        self.assertEqual(model.transcribe_kwargs["temperature"], (0.0, 0.2, 0.4))
+        self.assertEqual(model.transcribe_kwargs["beam_size"], 5)
 
 
 class SubtitleWordLimitTests(unittest.TestCase):
@@ -60,6 +70,25 @@ class SubtitleWordLimitTests(unittest.TestCase):
         self.assertEqual(result[0]["text"], "um dois tres quatro cinco seis sete oito")
         self.assertEqual(result[1]["text"], "nove")
         self.assertEqual(result[0]["end"], result[1]["start"])
+
+    def test_uses_real_word_timestamps_for_original_srt(self) -> None:
+        words = [
+            {"word": word, "start": index * 0.5, "end": index * 0.5 + 0.3}
+            for index, word in enumerate("um dois tres quatro cinco seis sete oito nove".split())
+        ]
+        segments = [{
+            "start": 0.0,
+            "end": 9.0,
+            "text": "um dois tres quatro cinco seis sete oito nove",
+            "words": words,
+        }]
+
+        result = split_segments_by_word_limit(segments, use_word_timestamps=True)
+
+        self.assertEqual(result[0]["start"], 0.0)
+        self.assertEqual(result[0]["end"], 3.8)
+        self.assertEqual(result[1]["start"], 4.0)
+        self.assertEqual(result[1]["end"], 4.3)
 
 
 class FakeResponse:
@@ -88,7 +117,8 @@ class DeepLCloudTranslatorTests(unittest.TestCase):
         self.assertEqual(request.args[0], "https://api-free.deepl.com/v2/translate")
         self.assertEqual(request.kwargs["data"]["text"], ["Hello, world."])
         self.assertEqual(request.kwargs["data"]["target_lang"], "PT-BR")
-        self.assertEqual(request.kwargs["data"]["formality"], "prefer_more")
+        self.assertEqual(request.kwargs["data"]["formality"], "prefer_less")
+        self.assertEqual(request.kwargs["data"]["model_type"], "prefer_quality_optimized")
         self.assertNotIn("secret:fx", request.kwargs["data"])
 
     @patch("requests.post")
@@ -99,10 +129,11 @@ class DeepLCloudTranslatorTests(unittest.TestCase):
         )
         translator = DeepLCloudTranslator("paid-secret", "en", "pt")
 
-        translated = translator.translate_many(["First", "Second"])
+        translated = translator.translate_many(["First", "Second"], context="Previous dialogue")
 
         self.assertEqual(translated, ["Primeiro", "Segundo"])
         self.assertEqual(post.call_args.kwargs["data"]["text"], ["First", "Second"])
+        self.assertEqual(post.call_args.kwargs["data"]["context"], "Previous dialogue")
 
     @patch("requests.post")
     def test_reports_exhausted_quota(self, post: object) -> None:
@@ -111,6 +142,16 @@ class DeepLCloudTranslatorTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "Cota mensal"):
             translator.translate("Hello")
+
+    @patch("requests.post")
+    def test_does_not_retry_exhausted_quota(self, post: object) -> None:
+        post.return_value = FakeResponse(456, {})
+        translator = DeepLCloudTranslator("paid-secret", "en", "pt")
+
+        with self.assertRaisesRegex(RuntimeError, "Cota mensal"):
+            translate_packed_batch(["Hello"], lambda: translator, 0.0)
+
+        self.assertEqual(post.call_count, 1)
 
 
 class DeepLConfigTests(unittest.TestCase):

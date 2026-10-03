@@ -78,6 +78,11 @@ O modelo Whisper e carregado uma vez e reutilizado para todos os arquivos seleci
 - idioma de origem selecionado;
 - `fp16` quando CUDA esta ativa;
 - `verbose=False`.
+- timestamps por palavra habilitados;
+- `condition_on_previous_text=False` para reduzir loops de repeticao;
+- limite de silencio para reduzir alucinacoes sem fala;
+- beam search com cinco candidatos;
+- temperaturas restritas a `0.0`, `0.2` e `0.4` para evitar amostragens muito aleatorias.
 
 O Whisper usa internamente `tqdm` para reportar frames processados. A funcao substitui temporariamente esse `tqdm` por um adaptador para a barra Rich. O objeto original e restaurado em um bloco `finally`, inclusive quando ocorre erro.
 
@@ -87,7 +92,7 @@ Esse ponto depende de uma API interna do pacote Whisper (`whisper.transcribe.tqd
 
 Assim que a transcricao termina, `process_file()` cria uma copia dos segmentos e chama `split_segments_by_word_limit()` antes de gravar `<nome>_sem_traducao.srt`.
 
-A divisao usa a quantidade de palavras. O intervalo de tempo original e repartido proporcionalmente entre os novos blocos. Exemplo: um segmento de nove palavras vira um bloco de oito e outro de uma palavra. Essa temporizacao e uma aproximacao; ela nao usa timestamps individuais de palavras.
+A divisao usa a quantidade de palavras. No SRT original, os novos blocos usam timestamps reais por palavra fornecidos pelo Whisper. Se esses timestamps nao estiverem disponiveis, o intervalo e repartido proporcionalmente. Exemplo: um segmento de nove palavras vira um bloco de oito e outro de uma palavra.
 
 ### 6. Traducao DeepL Cloud
 
@@ -98,7 +103,9 @@ A divisao usa a quantidade de palavras. O intervalo de tempo original e repartid
 - chave enviada no cabecalho `Authorization`;
 - destino `pt` convertido para `PT-BR`;
 - `preserve_formatting=1`;
-- `formality=prefer_more`.
+- `formality=prefer_less`, adequado a dialogos informais em portugues brasileiro;
+- `model_type=prefer_quality_optimized`, com fallback automatico do DeepL quando necessario;
+- contexto das falas vizinhas enviado sem custo de caracteres para melhorar frases curtas e ambiguas.
 
 A chave nao e enviada no corpo da requisicao nem exibida no progresso.
 
@@ -113,7 +120,8 @@ Erros especiais:
 
 - HTTP 403: chave invalida ou sem permissao.
 - HTTP 456: cota mensal DeepL esgotada.
-- Outros erros HTTP/rede: retentados e depois apresentados como falha.
+- HTTP 400, 403 e 456: apresentados imediatamente, sem retentativas inuteis.
+- HTTP 429, 5xx e erros de rede: retentados e depois apresentados como falha.
 
 O SRT original ja esta salvo quando a traducao comeca; portanto, uma falha da nuvem nao perde a transcricao.
 
@@ -140,7 +148,7 @@ As estimativas usam a duracao detectada pelo FFmpeg e uma razao predefinida por 
 ## Parametros publicos
 
 - `input`: zero ou mais arquivos. Sem valor, abre seletor grafico.
-- `--model`: modelo Whisper; padrao `small`.
+- `--model`: modelo Whisper; padrao `medium` para maior qualidade.
 - `--source`: idioma do audio; padrao `en`.
 - `--target`: idioma da traducao; padrao `pt`, convertido para `PT-BR` no DeepL.
 - `--output`: nome base customizado; permitido apenas para um arquivo.
@@ -161,8 +169,9 @@ Os testes atuais cobrem:
 - limite de oito palavras e continuidade dos tempos;
 - endpoint DeepL Free;
 - destino `PT-BR` e formalidade;
+- contexto e preferencia pelo modelo DeepL de maior qualidade;
 - alinhamento de lotes DeepL;
-- erro de cota HTTP 456;
+- erro de cota HTTP 456 sem retentativas;
 - prioridade da chave em `config.json`;
 - diagnostico de JSON invalido.
 

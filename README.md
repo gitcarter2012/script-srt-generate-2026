@@ -40,6 +40,8 @@ O terminal mostra:
 - timeout e retentativas limitadas para evitar espera indefinida
 - traducao premium em portugues brasileiro pelo DeepL Cloud
 - lotes nativos do DeepL preservam cada fala separadamente
+- modelo DeepL otimizado para qualidade, contexto entre falas e tom informal
+- Whisper medium com controles para reduzir repeticoes e alucinacoes em silencio
 
 ## Traducao premium
 O script usa exclusivamente o DeepL Cloud para a traducao final. Crie uma chave de API no DeepL e preencha o arquivo `config.json`:
@@ -105,7 +107,7 @@ Observacao: use --output apenas com um unico arquivo de entrada.
 
 ## Parametros
 - input: caminho(s) do(s) arquivo(s).
-- --model: tiny, base, small, medium, large.
+- --model: tiny, base, small, medium, large (padrao: medium).
 - --source: idioma do audio (padrao: en).
 - --target: idioma de traducao (padrao: pt).
 - --output: nome base do arquivo de saida (sem extensao).

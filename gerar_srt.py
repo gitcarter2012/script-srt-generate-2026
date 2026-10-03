@@ -339,7 +339,11 @@ def get_runtime_device(torch_module: object, preferred_mode: str) -> tuple[str, 
     return "cpu", False
 
 
-def split_segments_by_word_limit(segments: list[dict[str, object]], max_words: int = 8) -> list[dict[str, object]]:
+def split_segments_by_word_limit(
+    segments: list[dict[str, object]],
+    max_words: int = 8,
+    use_word_timestamps: bool = False,
+) -> list[dict[str, object]]:
     limited_segments = []
     for segment in segments:
         words = str(segment.get("text", "")).split()
@@ -351,18 +355,28 @@ def split_segments_by_word_limit(segments: list[dict[str, object]], max_words: i
 
         start = float(segment["start"])
         duration = float(segment["end"]) - start
+        timed_words = segment.get("words", []) if use_word_timestamps else []
+        has_word_timestamps = isinstance(timed_words, list) and len(timed_words) == len(words)
         word_offset = 0
         for chunk_start in range(0, len(words), max_words):
             chunk = words[chunk_start:chunk_start + max_words]
             next_word_offset = word_offset + len(chunk)
             chunk_segment = segment.copy()
             chunk_segment["text"] = " ".join(chunk)
-            chunk_segment["start"] = start + duration * word_offset / len(words)
-            chunk_segment["end"] = start + duration * next_word_offset / len(words)
+            if has_word_timestamps:
+                chunk_segment["start"] = float(timed_words[word_offset]["start"])
+                chunk_segment["end"] = float(timed_words[next_word_offset - 1]["end"])
+            else:
+                chunk_segment["start"] = start + duration * word_offset / len(words)
+                chunk_segment["end"] = start + duration * next_word_offset / len(words)
             limited_segments.append(chunk_segment)
             word_offset = next_word_offset
 
     return limited_segments
+
+
+class DeepLNonRetryableError(RuntimeError):
+    pass
 
 
 class DeepLCloudTranslator:
@@ -379,24 +393,30 @@ class DeepLCloudTranslator:
     def translate(self, text: str) -> str:
         return self.translate_many([text])[0]
 
-    def translate_many(self, texts: list[str]) -> list[str]:
+    def translate_many(self, texts: list[str], context: str | None = None) -> list[str]:
         requests_module = importlib.import_module("requests")
+        request_data: dict[str, object] = {
+            "text": texts,
+            "source_lang": self.source_language,
+            "target_lang": self.target_language,
+            "preserve_formatting": "1",
+            "formality": "prefer_less",
+            "model_type": "prefer_quality_optimized",
+        }
+        if context:
+            request_data["context"] = context
         response = requests_module.post(
             self.api_url,
             headers={"Authorization": f"DeepL-Auth-Key {self.api_key}"},
-            data={
-                "text": texts,
-                "source_lang": self.source_language,
-                "target_lang": self.target_language,
-                "preserve_formatting": "1",
-                "formality": "prefer_more",
-            },
+            data=request_data,
             timeout=30,
         )
+        if response.status_code == 400:
+            raise DeepLNonRetryableError("Requisicao DeepL invalida. Verifique idiomas e configuracao.")
         if response.status_code == 403:
-            raise RuntimeError("Chave DeepL invalida ou sem permissao para traducao.")
+            raise DeepLNonRetryableError("Chave DeepL invalida ou sem permissao para traducao.")
         if response.status_code == 456:
-            raise RuntimeError("Cota mensal da conta DeepL esgotada.")
+            raise DeepLNonRetryableError("Cota mensal da conta DeepL esgotada.")
         response.raise_for_status()
         translations = response.json().get("translations", [])
         translated_texts = [str(item.get("text", "")).strip() for item in translations]
@@ -438,6 +458,7 @@ def translate_packed_batch(
     texts: list[str],
     create_translator: Callable[[], object],
     min_interval_seconds: float,
+    context: str | None = None,
 ) -> list[str]:
     translator = create_translator()
     if hasattr(translator, "translate_many"):
@@ -446,7 +467,9 @@ def translate_packed_batch(
             if min_interval_seconds > 0:
                 time.sleep(min_interval_seconds)
             try:
-                return translator.translate_many(texts)
+                return translator.translate_many(texts, context=context)
+            except DeepLNonRetryableError:
+                raise
             except Exception as exc:  # noqa: BLE001 - Retentativa da API cloud.
                 last_error = exc
                 if attempt < 2:
@@ -482,8 +505,8 @@ def translate_packed_batch(
     except ValueError:
         middle = len(texts) // 2
         return (
-            translate_packed_batch(texts[:middle], create_translator, min_interval_seconds)
-            + translate_packed_batch(texts[middle:], create_translator, min_interval_seconds)
+            translate_packed_batch(texts[:middle], create_translator, min_interval_seconds, context)
+            + translate_packed_batch(texts[middle:], create_translator, min_interval_seconds, context)
         )
 
 
@@ -508,7 +531,18 @@ def translate_segments_strict(
         provider_name = "DeepL Cloud"
         if on_batch_start:
             on_batch_start(len(batch_texts), provider_name)
-        translations = translate_packed_batch(batch_texts, create_translator, min_interval_seconds)
+        context_start = max(0, batch_indexes[0] - 3)
+        context_end = min(len(segments), batch_indexes[-1] + 4)
+        context = "\n".join(
+            str(segments[index].get("text", "")).strip()
+            for index in range(context_start, context_end)
+        )
+        translations = translate_packed_batch(
+            batch_texts,
+            create_translator,
+            min_interval_seconds,
+            context=context,
+        )
         for segment_index, translated_text in zip(batch_indexes, translations):
             translated_segments[segment_index]["text"] = translated_text
         if on_batch_complete:
@@ -585,6 +619,11 @@ def transcribe_with_rich_progress(
             language=source_language,
             fp16=use_fp16,
             verbose=False,
+            word_timestamps=True,
+            condition_on_previous_text=False,
+            hallucination_silence_threshold=2.0,
+            temperature=(0.0, 0.2, 0.4),
+            beam_size=5,
         )
     finally:
         whisper_transcribe_module.tqdm.tqdm = original_tqdm
@@ -636,7 +675,10 @@ def process_file(
 
         progress.update(phases_task, description=f"{input_path.name} - gravando SRT original")
         original_result = result.copy()
-        original_result["segments"] = split_segments_by_word_limit([segment.copy() for segment in segments])
+        original_result["segments"] = split_segments_by_word_limit(
+            [segment.copy() for segment in segments],
+            use_word_timestamps=True,
+        )
         writer(original_result, f"{output_base}_sem_traducao")
         progress.update(phases_task, advance=1)
 
@@ -683,7 +725,7 @@ def process_file(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Gerar SRT de um MP4 e traduzir automaticamente.")
     parser.add_argument("input", nargs="*", help="Caminho(s) do(s) arquivo(s) de video/audio")
-    parser.add_argument("--model", default="small", help="Modelo Whisper: tiny, base, small, medium, large")
+    parser.add_argument("--model", default="medium", help="Modelo Whisper: tiny, base, small, medium, large")
     parser.add_argument("--source", default="en", help="Idioma do áudio (ex: en)")
     parser.add_argument("--target", default="pt", help="Idioma de tradução (ex: pt)")
     parser.add_argument("--output", default=None, help="Nome base do arquivo de saída (sem extensão)")
