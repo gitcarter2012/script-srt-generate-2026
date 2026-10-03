@@ -89,6 +89,8 @@ class FasterWhisperTranscriber:
             word_timestamps=True,
             vad_filter=True,
             vad_parameters={
+                "threshold": 0.6,
+                "min_speech_duration_ms": 250,
                 "min_silence_duration_ms": 500,
                 "speech_pad_ms": 300,
             },
@@ -111,10 +113,12 @@ class FasterWhisperTranscriber:
                 }
                 for word in (segment.words or [])
             ]
+            spoken_start = float(words[0]["start"]) if words else float(segment.start)
+            spoken_end = float(words[-1]["end"]) if words else float(segment.end)
             normalized_segments.append(
                 {
-                    "start": float(segment.start),
-                    "end": float(segment.end),
+                    "start": spoken_start,
+                    "end": spoken_end,
                     "text": segment.text.strip(),
                     "words": words,
                 }
@@ -170,11 +174,14 @@ class LegacyWhisperTranscriber:
                 language=source_language,
                 fp16=self.device == "cuda",
                 verbose=False,
-                word_timestamps=True,
+                word_timestamps=False,
                 condition_on_previous_text=False,
                 hallucination_silence_threshold=2.0,
                 temperature=(0.0, 0.2, 0.4),
                 beam_size=5,
+                compression_ratio_threshold=2.4,
+                logprob_threshold=-1.0,
+                no_speech_threshold=0.6,
             )
         finally:
             whisper_transcribe.tqdm.tqdm = original_tqdm

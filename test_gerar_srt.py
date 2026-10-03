@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 
 from gerar_srt import DeepLCloudTranslator, get_deepl_api_key, split_segments_by_word_limit, translate_packed_batch
 from srt_generator.runtime import choose_execution_profile, configure_huggingface_downloads
+from srt_generator.subtitles import write_srt
 from srt_generator.transcription import FasterWhisperTranscriber, LegacyWhisperTranscriber
 
 
@@ -112,6 +113,7 @@ class TranscriptionProgressTests(unittest.TestCase):
         )
 
         self.assertEqual(result[0]["text"], "Hello")
+        self.assertEqual((result[0]["start"], result[0]["end"]), (1.0, 1.5))
         self.assertEqual(progress_events, [(2.0, 4.0), (4.0, 4.0)])
         self.assertTrue(model.transcribe_kwargs["word_timestamps"])
         self.assertTrue(model.transcribe_kwargs["vad_filter"])
@@ -196,13 +198,13 @@ class TranscriptionProgressTests(unittest.TestCase):
         self.assertEqual(progress_events[-1], (1.0, 1.0))
         self.assertIs(whisper_transcribe.tqdm.tqdm, original_tqdm)
         self.assertFalse(model.transcribe_kwargs["fp16"])
-        self.assertTrue(model.transcribe_kwargs["word_timestamps"])
+        self.assertFalse(model.transcribe_kwargs["word_timestamps"])
         self.assertFalse(model.transcribe_kwargs["condition_on_previous_text"])
         self.assertEqual(model.transcribe_kwargs["beam_size"], 5)
 
 
 class SubtitleWordLimitTests(unittest.TestCase):
-    def test_starts_new_caption_after_eight_words(self) -> None:
+    def test_starts_new_caption_after_six_words(self) -> None:
         segments = [{
             "start": 0.0,
             "end": 9.0,
@@ -211,8 +213,8 @@ class SubtitleWordLimitTests(unittest.TestCase):
 
         result = split_segments_by_word_limit(segments)
 
-        self.assertEqual(result[0]["text"], "um dois tres quatro cinco seis sete oito")
-        self.assertEqual(result[1]["text"], "nove")
+        self.assertEqual(result[0]["text"], "um dois tres quatro cinco seis")
+        self.assertEqual(result[1]["text"], "sete oito nove")
         self.assertEqual(result[0]["end"], result[1]["start"])
 
     def test_uses_real_word_timestamps_for_original_srt(self) -> None:
@@ -230,9 +232,39 @@ class SubtitleWordLimitTests(unittest.TestCase):
         result = split_segments_by_word_limit(segments, use_word_timestamps=True)
 
         self.assertEqual(result[0]["start"], 0.0)
-        self.assertEqual(result[0]["end"], 3.8)
-        self.assertEqual(result[1]["start"], 4.0)
+        self.assertEqual(result[0]["end"], 2.8)
+        self.assertEqual(result[1]["start"], 3.0)
         self.assertEqual(result[1]["end"], 4.3)
+
+    def test_trims_short_caption_to_spoken_word_timestamps(self) -> None:
+        segments = [{
+            "start": 10.0,
+            "end": 30.0,
+            "text": "duas palavras",
+            "words": [
+                {"word": "duas", "start": 12.0, "end": 12.4},
+                {"word": "palavras", "start": 12.5, "end": 13.0},
+            ],
+        }]
+
+        result = split_segments_by_word_limit(segments, use_word_timestamps=True)
+
+        self.assertEqual((result[0]["start"], result[0]["end"]), (12.0, 13.0))
+
+    def test_srt_numbering_remains_continuous_after_empty_text(self) -> None:
+        segments = [
+            {"start": 0.0, "end": 1.0, "text": "primeiro"},
+            {"start": 1.0, "end": 2.0, "text": ""},
+            {"start": 2.0, "end": 3.0, "text": "terceiro"},
+        ]
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output_path = Path(temporary_directory) / "output.srt"
+
+            write_srt(segments, output_path)
+
+            content = output_path.read_text(encoding="utf-8")
+        self.assertIn("\n\n2\n00:00:02,000", content)
+        self.assertNotIn("\n\n3\n", content)
 
 
 class FakeResponse:

@@ -49,7 +49,7 @@ No Windows, `try_install_nvidia_runtime()` tenta instalar cuBLAS CUDA 12 e cuDNN
 
 `FasterWhisperTranscriber` protege tanto o carregamento quanto o consumo do gerador lazy. Se cuBLAS, cuDNN ou CUDA falharem no primeiro `encode`, prepara o runtime, recria o modelo e tenta GPU uma vez. Se ainda falhar, reinicia a transcricao em CPU int8. O modelo e baixado para `%LOCALAPPDATA%/generate-srt/models` e reutilizado.
 
-No motor legado, `ensure_legacy_torch_cuda()` tenta builds PyTorch `cu128`, `cu126` e `cu124`. Depois de trocar a build, reinicia o processo para que as DLLs CUDA sejam carregadas. `configure_legacy_ffmpeg()` disponibiliza o executavel do `imageio-ffmpeg` no `PATH` da execucao.
+No motor legado, `ensure_legacy_torch_cuda()` tenta builds PyTorch `cu128`, `cu126` e `cu124`. Depois de trocar a build, reinicia o processo para que as DLLs CUDA sejam carregadas. `configure_legacy_ffmpeg()` disponibiliza o executavel do `imageio-ffmpeg` no `PATH` da execucao. Esse adaptador usa timestamps por segmento: ativar `word_timestamps` no Windows aciona os fallbacks DTW e mediana sem Triton e torna o processamento muito mais lento.
 
 ## Transcricao
 
@@ -68,7 +68,7 @@ O faster-whisper tambem usa Silero VAD e devolve um gerador lazy. `transcribe()`
 
 ## Legendas
 
-`split_segments_by_word_limit()` limita cada entrada a oito palavras. Na transcricao original, usa timestamps reais por palavra. Na traducao, reparte o intervalo proporcionalmente, pois a resposta DeepL nao possui alinhamento de audio.
+`split_segments_by_word_limit()` limita cada entrada a seis palavras. No faster-whisper, os segmentos ja sao recortados pela primeira e pela ultima palavra detectadas; a transcricao original tambem usa esses timestamps ao dividir entradas. Na traducao, reparte o intervalo proporcionalmente, pois a resposta DeepL nao possui alinhamento de audio.
 
 `write_srt()` e interno e grava UTF-8 com timestamps `HH:MM:SS,mmm`. Assim, o writer nao depende de openai-whisper.
 

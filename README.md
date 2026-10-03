@@ -24,7 +24,7 @@ Para cada `video.mp4`, o script grava na mesma pasta:
 - `video_sem_traducao.srt`: transcricao original;
 - `video.srt`: traducao premium para portugues brasileiro.
 
-Cada entrada possui no maximo oito palavras. O terminal mostra o progresso real da transcricao conforme o audio e processado e o progresso de cada lote DeepL.
+Cada entrada possui no maximo seis palavras. No faster-whisper, os limites de cada legenda sao recortados pela primeira e pela ultima palavra realmente faladas para nao manter texto durante o silencio. O terminal mostra o progresso real da transcricao conforme o audio e processado e o progresso de cada lote DeepL.
 
 ## Primeira execucao
 

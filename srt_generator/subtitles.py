@@ -3,7 +3,7 @@ from pathlib import Path
 
 def split_segments_by_word_limit(
     segments: list[dict[str, object]],
-    max_words: int = 8,
+    max_words: int = 6,
     use_word_timestamps: bool = False,
 ) -> list[dict[str, object]]:
     limited_segments = []
@@ -11,14 +11,17 @@ def split_segments_by_word_limit(
         words = str(segment.get("text", "")).split()
         normalized_segment = segment.copy()
         normalized_segment["text"] = " ".join(words)
+        timed_words = segment.get("words", []) if use_word_timestamps else []
+        has_word_timestamps = isinstance(timed_words, list) and len(timed_words) == len(words)
         if len(words) <= max_words:
+            if has_word_timestamps and timed_words:
+                normalized_segment["start"] = float(timed_words[0]["start"])
+                normalized_segment["end"] = float(timed_words[-1]["end"])
             limited_segments.append(normalized_segment)
             continue
 
         start = float(segment["start"])
         duration = float(segment["end"]) - start
-        timed_words = segment.get("words", []) if use_word_timestamps else []
-        has_word_timestamps = isinstance(timed_words, list) and len(timed_words) == len(words)
         word_offset = 0
         for chunk_start in range(0, len(words), max_words):
             chunk = words[chunk_start:chunk_start + max_words]
@@ -47,10 +50,11 @@ def format_srt_timestamp(seconds: float) -> str:
 
 def write_srt(segments: list[dict[str, object]], output_path: Path) -> None:
     blocks = []
-    for index, segment in enumerate(segments, start=1):
+    for segment in segments:
         text = " ".join(str(segment.get("text", "")).split())
         if not text:
             continue
+        index = len(blocks) + 1
         blocks.append(
             f"{index}\n"
             f"{format_srt_timestamp(float(segment['start']))} --> "
