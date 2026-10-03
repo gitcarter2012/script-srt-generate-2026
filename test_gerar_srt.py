@@ -365,7 +365,7 @@ class TranscriptionProgressTests(unittest.TestCase):
     def test_long_audio_keeps_only_window_core_segments(self, decode_audio: Mock) -> None:
         before_core = type("Segment", (), {"start": 4.0, "end": 4.5, "text": " before", "words": []})()
         inside_core = type("Segment", (), {"start": 6.0, "end": 6.5, "text": " inside", "words": []})()
-        next_overlap = type("Segment", (), {"start": 305.5, "end": 305.9, "text": " next", "words": []})()
+        next_overlap = type("Segment", (), {"start": 245.5, "end": 245.9, "text": " next", "words": []})()
         next_core = type("Segment", (), {"start": 5.5, "end": 5.9, "text": " next", "words": []})()
         model = Mock()
         model.transcribe.side_effect = [
@@ -378,7 +378,7 @@ class TranscriptionProgressTests(unittest.TestCase):
 
         result = transcriber._transcribe_in_windows(
             Path("long.wav"),
-            601.0,
+            481.0,
             {"language": "ja"},
             None,
         )
@@ -533,6 +533,13 @@ class SubtitleWordLimitTests(unittest.TestCase):
         result = split_segments_by_word_limit(segments, use_word_timestamps=True)
 
         self.assertEqual((result[0]["start"], result[0]["end"]), (12.0, 13.0))
+
+    def test_caps_caption_duration_without_word_splits(self) -> None:
+        segments = [{"start": 10.0, "end": 17.52, "text": "日本語字幕"}]
+
+        result = split_segments_by_word_limit(segments)
+
+        self.assertEqual((result[0]["start"], result[0]["end"]), (10.0, 17.5))
 
     def test_srt_numbering_remains_continuous_after_empty_text(self) -> None:
         segments = [

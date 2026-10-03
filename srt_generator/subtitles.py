@@ -15,6 +15,7 @@ def split_segments_by_word_limit(
     segments: list[dict[str, object]],
     max_words: int = 6,
     use_word_timestamps: bool = False,
+    max_duration_seconds: float = 7.5,
 ) -> list[dict[str, object]]:
     limited_segments = []
     for segment in segments:
@@ -27,6 +28,10 @@ def split_segments_by_word_limit(
             if has_word_timestamps and timed_words:
                 normalized_segment["start"] = float(timed_words[0]["start"])
                 normalized_segment["end"] = float(timed_words[-1]["end"])
+            normalized_segment["end"] = min(
+                float(normalized_segment["end"]),
+                float(normalized_segment["start"]) + max_duration_seconds,
+            )
             limited_segments.append(normalized_segment)
             continue
 
@@ -44,6 +49,10 @@ def split_segments_by_word_limit(
             else:
                 chunk_segment["start"] = start + duration * word_offset / len(words)
                 chunk_segment["end"] = start + duration * next_word_offset / len(words)
+            chunk_segment["end"] = min(
+                float(chunk_segment["end"]),
+                float(chunk_segment["start"]) + max_duration_seconds,
+            )
             limited_segments.append(chunk_segment)
             word_offset = next_word_offset
 
