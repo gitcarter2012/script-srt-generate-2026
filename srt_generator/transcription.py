@@ -1,5 +1,6 @@
 import importlib
 from pathlib import Path
+import re
 from typing import Any, Callable
 
 from .media import get_audio_duration_seconds, get_media_duration_seconds, recovered_audio_path
@@ -9,6 +10,9 @@ from .runtime import model_cache_dir, try_install_nvidia_runtime
 MAX_WORD_GAP_SECONDS = 2.5
 MAX_MERGED_SEGMENT_SECONDS = 7.5
 MIN_SHORT_SEGMENT_WORD_PROBABILITY = 0.2
+LONG_AUDIO_THRESHOLD_SECONDS = 1200
+TRANSCRIPTION_WINDOW_SECONDS = 300
+TRANSCRIPTION_WINDOW_OVERLAP_SECONDS = 5
 
 
 def _split_segment_at_word_gaps(segment: Any, words: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -91,6 +95,36 @@ def _filter_low_confidence_short_segments(
     return filtered_segments
 
 
+def _rejoin_japanese_boundary_characters(
+    segments: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    rejoined_segments: list[dict[str, object]] = []
+    pending_character = ""
+    for segment in segments:
+        text = str(segment["text"]).strip()
+        if pending_character and re.match(r"[\u3040-\u30ff\u3400-\u9fff]", text):
+            text = pending_character + text
+            pending_character = ""
+        elif pending_character:
+            if rejoined_segments:
+                rejoined_segments[-1]["text"] = str(rejoined_segments[-1]["text"]) + pending_character
+            pending_character = ""
+
+        trailing_character = re.search(r"(?:^|\s)([\u3040-\u30ff\u3400-\u9fff])$", text)
+        if trailing_character:
+            pending_character = trailing_character.group(1)
+            text = text[:trailing_character.start()].rstrip()
+
+        if text:
+            normalized_segment = segment.copy()
+            normalized_segment["text"] = text
+            rejoined_segments.append(normalized_segment)
+
+    if pending_character and rejoined_segments:
+        rejoined_segments[-1]["text"] = str(rejoined_segments[-1]["text"]) + pending_character
+    return rejoined_segments
+
+
 class FasterWhisperTranscriber:
     def __init__(
         self,
@@ -169,25 +203,28 @@ class FasterWhisperTranscriber:
         on_progress: Callable[[float, float], None] | None,
         allow_audio_recovery: bool = True,
     ) -> list[dict[str, object]]:
-        segments_generator, info = self.model.transcribe(
-            str(input_path),
-            language=source_language,
-            beam_size=5,
-            word_timestamps=True,
-            vad_filter=True,
-            vad_parameters={
+        transcribe_options = {
+            "language": source_language,
+            "beam_size": 5,
+            "word_timestamps": True,
+            "vad_filter": True,
+            "vad_parameters": {
                 "threshold": 0.5,
                 "min_speech_duration_ms": 250,
                 "max_speech_duration_s": 15,
                 "min_silence_duration_ms": 500,
                 "speech_pad_ms": 300,
             },
-            condition_on_previous_text=False,
-            temperature=[0.0, 0.2, 0.4],
-            compression_ratio_threshold=2.4,
-            log_prob_threshold=-1.0,
-            no_speech_threshold=0.6,
-            hallucination_silence_threshold=2.0,
+            "condition_on_previous_text": False,
+            "temperature": [0.0, 0.2, 0.4],
+            "compression_ratio_threshold": 2.4,
+            "log_prob_threshold": -1.0,
+            "no_speech_threshold": 0.6,
+            "hallucination_silence_threshold": 2.0,
+        }
+        segments_generator, info = self.model.transcribe(
+            str(input_path),
+            **transcribe_options,
         )
         total_duration = max(float(getattr(info, "duration", 0.0)), 0.001)
         known_durations = [
@@ -215,25 +252,101 @@ class FasterWhisperTranscriber:
                     on_progress,
                     allow_audio_recovery=False,
                 )
+
+        if total_duration > LONG_AUDIO_THRESHOLD_SECONDS:
+            return self._transcribe_in_windows(
+                input_path,
+                total_duration,
+                transcribe_options,
+                on_progress,
+            )
+        return self._consume_segments(segments_generator, total_duration, on_progress)
+
+    def _transcribe_in_windows(
+        self,
+        input_path: Path,
+        total_duration: float,
+        transcribe_options: dict[str, object],
+        on_progress: Callable[[float, float], None] | None,
+    ) -> list[dict[str, object]]:
+        from faster_whisper.audio import decode_audio
+
+        audio = decode_audio(str(input_path), sampling_rate=16000)
+        normalized_segments = []
+        core_start = 0.0
+        while core_start < total_duration:
+            core_end = min(core_start + TRANSCRIPTION_WINDOW_SECONDS, total_duration)
+            clip_start = max(0.0, core_start - TRANSCRIPTION_WINDOW_OVERLAP_SECONDS)
+            clip_end = min(total_duration, core_end + TRANSCRIPTION_WINDOW_OVERLAP_SECONDS)
+            sample_start = round(clip_start * 16000)
+            sample_end = round(clip_end * 16000)
+            segments_generator, _ = self.model.transcribe(
+                audio[sample_start:sample_end],
+                **transcribe_options,
+            )
+            window_segments = self._normalize_segments(
+                [
+                    segment
+                    for segment in segments_generator
+                    if float(segment.start) + clip_start >= core_start
+                    and float(segment.start) + clip_start < core_end
+                ],
+                timestamp_offset=clip_start,
+            )
+            normalized_segments.extend(window_segments)
+            if on_progress:
+                on_progress(core_end, total_duration)
+            core_start = core_end
+
+        return self._finalize_segments(normalized_segments)
+
+    def _consume_segments(
+        self,
+        segments_generator: object,
+        total_duration: float,
+        on_progress: Callable[[float, float], None] | None,
+    ) -> list[dict[str, object]]:
         normalized_segments = []
         for segment in segments_generator:
-            words = [
-                {
-                    "word": word.word,
-                    "start": float(word.start),
-                    "end": float(word.end),
-                    "probability": float(word.probability),
-                }
-                for word in (segment.words or [])
-            ]
-            normalized_segments.extend(_split_segment_at_word_gaps(segment, words))
+            normalized_segments.extend(self._normalize_segments([segment]))
             if on_progress:
                 on_progress(min(float(segment.end), total_duration), total_duration)
 
         if on_progress:
             on_progress(total_duration, total_duration)
+        return self._finalize_segments(normalized_segments)
+
+    @staticmethod
+    def _normalize_segments(
+        segments: object,
+        timestamp_offset: float = 0.0,
+    ) -> list[dict[str, object]]:
+        normalized_segments = []
+        for segment in segments:
+            words = [
+                {
+                    "word": word.word,
+                    "start": float(word.start) + timestamp_offset,
+                    "end": float(word.end) + timestamp_offset,
+                    "probability": float(word.probability),
+                }
+                for word in (segment.words or [])
+            ]
+            split_segments = _split_segment_at_word_gaps(segment, words)
+            if not words and timestamp_offset:
+                for split_segment in split_segments:
+                    split_segment["start"] = float(split_segment["start"]) + timestamp_offset
+                    split_segment["end"] = float(split_segment["end"]) + timestamp_offset
+            normalized_segments.extend(split_segments)
+        return normalized_segments
+
+    @staticmethod
+    def _finalize_segments(
+        normalized_segments: list[dict[str, object]],
+    ) -> list[dict[str, object]]:
         merged_segments = _merge_incomplete_nearby_segments(normalized_segments)
-        return _filter_low_confidence_short_segments(merged_segments)
+        filtered_segments = _filter_low_confidence_short_segments(merged_segments)
+        return _rejoin_japanese_boundary_characters(filtered_segments)
 
 
 class LegacyWhisperTranscriber:

@@ -65,6 +65,8 @@ O faster-whisper usa timestamps por palavra, Silero VAD e devolve um gerador laz
 
 Antes de consumir o gerador, o adaptador compara `info.duration` com a maior duracao conhecida entre a faixa de audio e o conteiner. Se o decoder entregar menos de 90%, `recovered_audio_path()` usa FFmpeg com `aresample=async=1:first_pts=0` para criar um WAV mono 16 kHz temporario e repete a transcricao uma vez. Isso permite continuar apos pacotes AAC invalidos que encerram o decoder PyAV prematuramente.
 
+Acima de 20 minutos, `_transcribe_in_windows()` decodifica o audio uma vez e envia fatias de cinco minutos ao modelo, com cinco segundos de sobreposicao em cada lado. Somente segmentos iniciados no nucleo da janela sao mantidos. Os timestamps locais recebem o deslocamento absoluto antes da normalizacao. `_rejoin_japanese_boundary_characters()` recompõe um unico caractere japones deixado na borda do segmento sem estender o cue pelo silencio.
+
 `LegacyWhisperTranscriber` detecta voz antes da transcricao, converte os intervalos em `clip_timestamps` e nao chama o modelo quando nao ha fala. Ele preserva timestamps por segmento para evitar o fallback DTW lento no Windows e adapta temporariamente seu `tqdm` interno para o callback Rich. O objeto original e restaurado em `finally`.
 
 O primeiro menu escolhe explicitamente o idioma de origem: `1` para ingles, `2` para espanhol e `3` para japones. O menu de motor vem depois e nao altera essa escolha. Ambos os adaptadores recebem o mesmo codigo de idioma, que tambem e usado como origem na chamada DeepL.

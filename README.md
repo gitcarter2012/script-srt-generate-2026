@@ -68,6 +68,8 @@ No faster-whisper, segmentos de ate duas palavras com confianca media inferior a
 
 Se o decoder interno entregar apenas parte da faixa de audio, o script compara a duracao decodificada com as duracoes do stream e do conteiner. Uma diferenca superior a 10% aciona a recuperacao automatica para WAV temporario pelo FFmpeg; o arquivo temporario e removido ao terminar.
 
+Audios acima de 20 minutos sao decodificados uma vez e transcritos em janelas de cinco minutos com cinco segundos de contexto sobreposto. As bordas de contexto sao descartadas para evitar duplicacoes e alucinacoes. No japones, caracteres isolados no limite entre segmentos sao recompostos com a fala seguinte antes da traducao.
+
 ## Chave DeepL
 
 Preencha `config.json`:

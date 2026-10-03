@@ -14,6 +14,7 @@ from srt_generator.transcription import (
     LegacyWhisperTranscriber,
     _filter_low_confidence_short_segments,
     _merge_incomplete_nearby_segments,
+    _rejoin_japanese_boundary_characters,
 )
 
 
@@ -273,6 +274,21 @@ class TranscriptionProgressTests(unittest.TestCase):
 
         self.assertEqual([segment["text"] for segment in result], ["Yes", "long uncertain phrase"])
 
+    def test_rejoins_isolated_japanese_boundary_characters(self) -> None:
+        segments = [
+            {"start": 1.0, "end": 2.0, "text": "昼も 奥", "words": []},
+            {"start": 10.0, "end": 11.0, "text": "さんのおっぱい 大", "words": []},
+            {"start": 20.0, "end": 21.0, "text": "きくなった", "words": []},
+        ]
+
+        result = _rejoin_japanese_boundary_characters(segments)
+
+        self.assertEqual(
+            [segment["text"] for segment in result],
+            ["昼も", "奥さんのおっぱい", "大きくなった"],
+        )
+        self.assertEqual(result[1]["start"], 10.0)
+
     @patch("srt_generator.transcription.get_audio_duration_seconds", side_effect=[100.0, 100.0])
     @patch("srt_generator.transcription.get_media_duration_seconds", side_effect=[100.0, 100.0])
     @patch("srt_generator.transcription.recovered_audio_path")
@@ -303,6 +319,48 @@ class TranscriptionProgressTests(unittest.TestCase):
         self.assertEqual(result[0]["text"], "Hello")
         self.assertEqual(model.transcribe.call_count, 2)
         self.assertEqual(model.transcribe.call_args_list[1].args[0], "recovered.wav")
+
+    @patch("faster_whisper.audio.decode_audio", return_value=[])
+    def test_long_audio_decodes_once_for_all_windows(self, decode_audio: Mock) -> None:
+        model = Mock()
+        model.transcribe.return_value = (iter([]), FakeInfo())
+        transcriber = FasterWhisperTranscriber.__new__(FasterWhisperTranscriber)
+        transcriber.model = model
+
+        result = transcriber._transcribe_in_windows(
+            Path("long.wav"),
+            601.0,
+            {"language": "ja"},
+            None,
+        )
+
+        self.assertEqual(result, [])
+        decode_audio.assert_called_once_with("long.wav", sampling_rate=16000)
+        self.assertEqual(model.transcribe.call_count, 3)
+
+    @patch("faster_whisper.audio.decode_audio", return_value=[])
+    def test_long_audio_keeps_only_window_core_segments(self, decode_audio: Mock) -> None:
+        before_core = type("Segment", (), {"start": 4.0, "end": 4.5, "text": " before", "words": []})()
+        inside_core = type("Segment", (), {"start": 6.0, "end": 6.5, "text": " inside", "words": []})()
+        next_overlap = type("Segment", (), {"start": 305.5, "end": 305.9, "text": " next", "words": []})()
+        next_core = type("Segment", (), {"start": 5.5, "end": 5.9, "text": " next", "words": []})()
+        model = Mock()
+        model.transcribe.side_effect = [
+            (iter([]), FakeInfo()),
+            (iter([before_core, inside_core, next_overlap]), FakeInfo()),
+            (iter([next_core]), FakeInfo()),
+        ]
+        transcriber = FasterWhisperTranscriber.__new__(FasterWhisperTranscriber)
+        transcriber.model = model
+
+        result = transcriber._transcribe_in_windows(
+            Path("long.wav"),
+            601.0,
+            {"language": "ja"},
+            None,
+        )
+
+        self.assertEqual([segment["text"] for segment in result], ["inside", "next"])
 
     @patch("srt_generator.transcription.try_install_nvidia_runtime", return_value=True)
     @patch("faster_whisper.WhisperModel")
