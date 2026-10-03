@@ -1,60 +1,96 @@
-import importlib
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-from gerar_srt import DeepLCloudTranslator, get_deepl_api_key, split_segments_by_word_limit, transcribe_with_rich_progress, translate_packed_batch
+from gerar_srt import DeepLCloudTranslator, get_deepl_api_key, split_segments_by_word_limit, translate_packed_batch
+from srt_generator.transcription import FasterWhisperTranscriber
 
 
-class FakeProgress:
-    def __init__(self) -> None:
-        self.events = []
+class FakeWord:
+    word = " hello"
+    start = 1.0
+    end = 1.5
+    probability = 0.9
 
-    def add_task(self, *args: object, **kwargs: object) -> int:
-        return 1
 
-    def update(self, *args: object, **kwargs: object) -> None:
-        self.events.append(kwargs)
+class FakeSegment:
+    start = 1.0
+    end = 2.0
+    text = " Hello"
+    words = [FakeWord()]
+
+
+class FakeInfo:
+    duration = 4.0
 
 
 class FakeModel:
     def __init__(self) -> None:
-        self.transcribe_kwargs = {}
+        self.transcribe_kwargs: dict[str, object] = {}
 
-    def transcribe(self, *args: object, **kwargs: object) -> dict[str, object]:
+    def transcribe(self, *args: object, **kwargs: object) -> tuple[object, FakeInfo]:
         self.transcribe_kwargs = kwargs
-        transcribe_module = importlib.import_module("whisper.transcribe")
-        with transcribe_module.tqdm.tqdm(total=100, unit="frames", disable=False) as progress:
-            progress.update(40)
-            progress.update(60)
-        return {"segments": []}
+        return iter([FakeSegment()]), FakeInfo()
 
 
 class TranscriptionProgressTests(unittest.TestCase):
-    def test_reports_whisper_frame_progress(self) -> None:
-        progress = FakeProgress()
+    def test_reports_faster_whisper_duration_progress(self) -> None:
         model = FakeModel()
-        transcribe_module = importlib.import_module("whisper.transcribe")
-        original_tqdm = transcribe_module.tqdm.tqdm
+        progress_events = []
+        transcriber = FasterWhisperTranscriber.__new__(FasterWhisperTranscriber)
+        transcriber.model = model
 
-        result = transcribe_with_rich_progress(
-            model=model,
-            input_path=Path("video.mp4"),
-            source_language="en",
-            use_fp16=False,
-            progress=progress,
+        result = transcriber.transcribe(
+            Path("video.mp4"),
+            "en",
+            lambda current, total: progress_events.append((current, total)),
         )
 
-        self.assertEqual(result, {"segments": []})
-        self.assertEqual(sum(event.get("advance", 0) for event in progress.events), 100)
-        self.assertEqual(progress.events[-1].get("completed"), 100)
-        self.assertIs(transcribe_module.tqdm.tqdm, original_tqdm)
+        self.assertEqual(result[0]["text"], "Hello")
+        self.assertEqual(progress_events, [(2.0, 4.0), (4.0, 4.0)])
         self.assertTrue(model.transcribe_kwargs["word_timestamps"])
+        self.assertTrue(model.transcribe_kwargs["vad_filter"])
         self.assertFalse(model.transcribe_kwargs["condition_on_previous_text"])
         self.assertEqual(model.transcribe_kwargs["hallucination_silence_threshold"], 2.0)
-        self.assertEqual(model.transcribe_kwargs["temperature"], (0.0, 0.2, 0.4))
+        self.assertEqual(model.transcribe_kwargs["temperature"], [0.0, 0.2, 0.4])
         self.assertEqual(model.transcribe_kwargs["beam_size"], 5)
+
+    @patch("srt_generator.transcription.try_install_nvidia_runtime", return_value=True)
+    @patch("faster_whisper.WhisperModel")
+    def test_retries_cuda_after_installing_runtime(self, whisper_model: Mock, install_runtime: Mock) -> None:
+        loaded_model = object()
+        whisper_model.side_effect = [RuntimeError("missing DLL"), loaded_model]
+
+        transcriber = FasterWhisperTranscriber("large-v3", "cuda", "int8_float16")
+
+        self.assertIs(transcriber.model, loaded_model)
+        install_runtime.assert_called_once_with()
+        self.assertEqual(whisper_model.call_count, 2)
+        self.assertTrue(all(item.kwargs["device"] == "cuda" for item in whisper_model.call_args_list))
+
+    @patch("srt_generator.transcription.try_install_nvidia_runtime", return_value=False)
+    @patch("faster_whisper.WhisperModel")
+    def test_falls_back_to_cpu_when_cuda_cannot_load(self, whisper_model: Mock, install_runtime: Mock) -> None:
+        loaded_model = object()
+        whisper_model.side_effect = [RuntimeError("missing DLL"), loaded_model]
+        errors = []
+
+        transcriber = FasterWhisperTranscriber(
+            "large-v3",
+            "cuda",
+            "int8_float16",
+            errors.append,
+        )
+
+        self.assertIs(transcriber.model, loaded_model)
+        self.assertEqual((transcriber.device, transcriber.compute_type), ("cpu", "int8"))
+        self.assertEqual(errors, ["missing DLL"])
+        install_runtime.assert_called_once_with()
+        self.assertEqual(
+            [item.kwargs["device"] for item in whisper_model.call_args_list],
+            ["cuda", "cpu"],
+        )
 
 
 class SubtitleWordLimitTests(unittest.TestCase):

@@ -1,0 +1,60 @@
+from pathlib import Path
+
+
+def split_segments_by_word_limit(
+    segments: list[dict[str, object]],
+    max_words: int = 8,
+    use_word_timestamps: bool = False,
+) -> list[dict[str, object]]:
+    limited_segments = []
+    for segment in segments:
+        words = str(segment.get("text", "")).split()
+        normalized_segment = segment.copy()
+        normalized_segment["text"] = " ".join(words)
+        if len(words) <= max_words:
+            limited_segments.append(normalized_segment)
+            continue
+
+        start = float(segment["start"])
+        duration = float(segment["end"]) - start
+        timed_words = segment.get("words", []) if use_word_timestamps else []
+        has_word_timestamps = isinstance(timed_words, list) and len(timed_words) == len(words)
+        word_offset = 0
+        for chunk_start in range(0, len(words), max_words):
+            chunk = words[chunk_start:chunk_start + max_words]
+            next_word_offset = word_offset + len(chunk)
+            chunk_segment = segment.copy()
+            chunk_segment["text"] = " ".join(chunk)
+            if has_word_timestamps:
+                chunk_segment["start"] = float(timed_words[word_offset]["start"])
+                chunk_segment["end"] = float(timed_words[next_word_offset - 1]["end"])
+            else:
+                chunk_segment["start"] = start + duration * word_offset / len(words)
+                chunk_segment["end"] = start + duration * next_word_offset / len(words)
+            limited_segments.append(chunk_segment)
+            word_offset = next_word_offset
+
+    return limited_segments
+
+
+def format_srt_timestamp(seconds: float) -> str:
+    milliseconds = max(0, round(seconds * 1000))
+    hours, remainder = divmod(milliseconds, 3_600_000)
+    minutes, remainder = divmod(remainder, 60_000)
+    secs, millis = divmod(remainder, 1000)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
+
+
+def write_srt(segments: list[dict[str, object]], output_path: Path) -> None:
+    blocks = []
+    for index, segment in enumerate(segments, start=1):
+        text = " ".join(str(segment.get("text", "")).split())
+        if not text:
+            continue
+        blocks.append(
+            f"{index}\n"
+            f"{format_srt_timestamp(float(segment['start']))} --> "
+            f"{format_srt_timestamp(float(segment['end']))}\n"
+            f"{text}"
+        )
+    output_path.write_text("\n\n".join(blocks) + ("\n" if blocks else ""), encoding="utf-8")
