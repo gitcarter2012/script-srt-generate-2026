@@ -1,8 +1,44 @@
 import importlib
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from .runtime import model_cache_dir, try_install_nvidia_runtime
+
+
+MAX_WORD_GAP_SECONDS = 1.2
+
+
+def _split_segment_at_word_gaps(segment: Any, words: list[dict[str, object]]) -> list[dict[str, object]]:
+    if not words:
+        return [{
+            "start": float(segment.start),
+            "end": float(segment.end),
+            "text": segment.text.strip(),
+            "words": [],
+        }]
+
+    groups: list[list[dict[str, object]]] = [[words[0]]]
+    for word in words[1:]:
+        previous_word = groups[-1][-1]
+        if float(word["start"]) - float(previous_word["end"]) > MAX_WORD_GAP_SECONDS:
+            groups.append([])
+        groups[-1].append(word)
+
+    if len(groups) == 1:
+        text_by_group = [segment.text.strip()]
+    else:
+        text_by_group = ["".join(str(word["word"]) for word in group).strip() for group in groups]
+
+    return [
+        {
+            "start": float(group[0]["start"]),
+            "end": float(group[-1]["end"]),
+            "text": text,
+            "words": group,
+        }
+        for group, text in zip(groups, text_by_group)
+        if text
+    ]
 
 
 class FasterWhisperTranscriber:
@@ -89,8 +125,9 @@ class FasterWhisperTranscriber:
             word_timestamps=True,
             vad_filter=True,
             vad_parameters={
-                "threshold": 0.6,
+                "threshold": 0.5,
                 "min_speech_duration_ms": 250,
+                "max_speech_duration_s": 15,
                 "min_silence_duration_ms": 500,
                 "speech_pad_ms": 300,
             },
@@ -113,16 +150,7 @@ class FasterWhisperTranscriber:
                 }
                 for word in (segment.words or [])
             ]
-            spoken_start = float(words[0]["start"]) if words else float(segment.start)
-            spoken_end = float(words[-1]["end"]) if words else float(segment.end)
-            normalized_segments.append(
-                {
-                    "start": spoken_start,
-                    "end": spoken_end,
-                    "text": segment.text.strip(),
-                    "words": words,
-                }
-            )
+            normalized_segments.extend(_split_segment_at_word_gaps(segment, words))
             if on_progress:
                 on_progress(min(float(segment.end), total_duration), total_duration)
 
@@ -150,8 +178,9 @@ class LegacyWhisperTranscriber:
         speech_chunks = get_speech_timestamps(
             audio,
             VadOptions(
-                threshold=0.6,
+                threshold=0.5,
                 min_speech_duration_ms=250,
+                max_speech_duration_s=15,
                 min_silence_duration_ms=500,
                 speech_pad_ms=300,
             ),

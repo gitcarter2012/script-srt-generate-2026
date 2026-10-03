@@ -32,7 +32,7 @@ Para cada `video.mp4`, o script grava na mesma pasta:
 - `video_sem_traducao.srt`: transcricao original;
 - `video.srt`: traducao premium para portugues brasileiro.
 
-Cada entrada possui no maximo seis palavras. No faster-whisper, os limites de cada legenda sao recortados pela primeira e pela ultima palavra realmente faladas para nao manter texto durante o silencio. O terminal mostra o progresso real da transcricao conforme o audio e processado e o progresso de cada lote DeepL.
+Cada entrada possui no maximo seis palavras. No faster-whisper, os limites de cada legenda sao recortados pela primeira e pela ultima palavra realmente faladas, e pausas internas acima de 1,2 segundo iniciam uma nova entrada. O terminal mostra o progresso real da transcricao conforme o audio e processado e o progresso de cada lote DeepL.
 
 ## Primeira execucao
 
@@ -62,7 +62,7 @@ No Windows com NVIDIA, o script tenta instalar `nvidia-cublas-cu12` e `nvidia-cu
 
 Para o Whisper antigo com GPU, o script instala uma build CUDA compativel do PyTorch e reinicia automaticamente para carregar as novas DLLs. Se CUDA nao ficar disponivel, continua em CPU.
 
-Os dois motores usam Silero VAD para ignorar intervalos sem voz. No Whisper antigo, somente esses intervalos sao enviados ao modelo, reduzindo alucinacoes em silencio e o tempo de processamento.
+Os dois motores usam Silero VAD para ignorar intervalos sem voz. Os blocos de voz sao limitados a 15 segundos para evitar que trechos mais baixos sejam descartados dentro de janelas longas. No Whisper antigo, somente esses intervalos sao enviados ao modelo, reduzindo alucinacoes em silencio e o tempo de processamento.
 
 ## Chave DeepL
 

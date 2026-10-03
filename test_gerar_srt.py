@@ -25,6 +25,16 @@ class FakeSegment:
     words = [FakeWord()]
 
 
+class FakeGappedSegment:
+    start = 1.0
+    end = 24.0
+    text = " First second"
+    words = [
+        type("Word", (), {"word": " First", "start": 1.0, "end": 1.5, "probability": 0.9})(),
+        type("Word", (), {"word": " second", "start": 22.0, "end": 22.5, "probability": 0.9})(),
+    ]
+
+
 class FakeInfo:
     duration = 4.0
 
@@ -36,6 +46,12 @@ class FakeModel:
     def transcribe(self, *args: object, **kwargs: object) -> tuple[object, FakeInfo]:
         self.transcribe_kwargs = kwargs
         return iter([FakeSegment()]), FakeInfo()
+
+
+class FakeGappedModel(FakeModel):
+    def transcribe(self, *args: object, **kwargs: object) -> tuple[object, FakeInfo]:
+        self.transcribe_kwargs = kwargs
+        return iter([FakeGappedSegment()]), FakeInfo()
 
 
 class FailingLazyCudaModel:
@@ -128,10 +144,23 @@ class TranscriptionProgressTests(unittest.TestCase):
         self.assertEqual(progress_events, [(2.0, 4.0), (4.0, 4.0)])
         self.assertTrue(model.transcribe_kwargs["word_timestamps"])
         self.assertTrue(model.transcribe_kwargs["vad_filter"])
+        self.assertEqual(model.transcribe_kwargs["vad_parameters"]["threshold"], 0.5)
+        self.assertEqual(model.transcribe_kwargs["vad_parameters"]["max_speech_duration_s"], 15)
         self.assertFalse(model.transcribe_kwargs["condition_on_previous_text"])
         self.assertEqual(model.transcribe_kwargs["hallucination_silence_threshold"], 2.0)
         self.assertEqual(model.transcribe_kwargs["temperature"], [0.0, 0.2, 0.4])
         self.assertEqual(model.transcribe_kwargs["beam_size"], 5)
+
+    def test_splits_faster_whisper_segment_across_internal_silence(self) -> None:
+        transcriber = FasterWhisperTranscriber.__new__(FasterWhisperTranscriber)
+        transcriber.model = FakeGappedModel()
+
+        result = transcriber.transcribe(Path("video.mp4"), "en")
+
+        self.assertEqual(
+            [(item["start"], item["end"], item["text"]) for item in result],
+            [(1.0, 1.5, "First"), (22.0, 22.5, "second")],
+        )
 
     @patch("srt_generator.transcription.try_install_nvidia_runtime", return_value=True)
     @patch("faster_whisper.WhisperModel")
