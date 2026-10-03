@@ -8,7 +8,7 @@
 - `srt_generator/runtime.py`: dependencias, deteccao NVIDIA, CUDA e fallback CPU;
 - `srt_generator/transcription.py`: adaptadores do faster-whisper e OpenAI Whisper legado;
 - `srt_generator/translation.py`: cliente e lotes DeepL;
-- `srt_generator/subtitles.py`: limite de palavras, timestamps e writer SRT;
+- `srt_generator/subtitles.py`: composicao semantica, timestamps e writer SRT;
 - `srt_generator/media.py`: duracao da midia via PyAV;
 - `srt_generator/ui.py`: paineis e tabela Rich;
 - `srt_generator/pipeline.py`: ordem das quatro fases;
@@ -73,7 +73,7 @@ O primeiro menu escolhe explicitamente o idioma de origem: `1` para ingles, `2` 
 
 ## Legendas
 
-`split_segments_by_word_limit()` limita cada entrada a seis palavras e distribui os termos de forma balanceada entre os blocos, evitando divisoes como `6+1`. No faster-whisper, os segmentos ja sao recortados pela primeira e pela ultima palavra detectadas; a transcricao original tambem usa esses timestamps ao dividir entradas. Na traducao, reparte o intervalo proporcionalmente, pois a resposta DeepL nao possui alinhamento de audio.
+`split_segments_by_word_limit()` mantem ate 12 palavras em duas linhas de no maximo 40 caracteres. A composicao favorece pontuacao, penaliza artigos e preposicoes no fim da primeira linha e rebalanceia blocos para evitar caudas de uma ou duas palavras. No faster-whisper, os segmentos ja sao recortados pela primeira e pela ultima palavra detectadas; a transcricao original tambem usa esses timestamps ao dividir entradas. Na traducao, reparte o intervalo proporcionalmente, pois a resposta DeepL nao possui alinhamento de audio. O nome da funcao foi preservado por compatibilidade com importadores existentes.
 
 `write_srt()` e interno e grava UTF-8 com timestamps `HH:MM:SS,mmm`. Assim, o writer nao depende de openai-whisper.
 
@@ -81,7 +81,7 @@ O original e sempre gravado antes da chamada DeepL. Uma falha de traducao preser
 
 ## Traducao
 
-`DeepLCloudTranslator` seleciona o endpoint Free para chaves `:fx` e o endpoint Pro para as demais. O destino `pt` vira `PT-BR`. As requisicoes usam contexto, `prefer_less`, `prefer_quality_optimized`, timeout de 30 segundos e autorizacao no cabecalho.
+`DeepLCloudTranslator` seleciona o endpoint Free para chaves `:fx` e o endpoint Pro para as demais. O destino `pt` vira `PT-BR`. As requisicoes usam as tres falas anteriores e posteriores ao lote como contexto, `prefer_less`, `prefer_quality_optimized`, timeout de 30 segundos e autorizacao no cabecalho. A resposta e mantida por segmento e so depois recebe a diagramacao de legenda.
 
 `translate_segments_strict()` limita lotes a 50 itens e cerca de 12.000 caracteres. HTTP 400, 403 e 456 nao sao retentados. Falhas transitórias recebem ate tres tentativas. O retorno deve manter quantidade, ordem e textos nao vazios.
 
@@ -105,7 +105,7 @@ Para trocar o backend de transcricao, preserve a interface `transcribe(path, lan
 
 Para trocar o tradutor, preserve `translate_many(texts, context) -> list[str]`, mantendo tamanho e ordem. Erros de credencial e cota devem continuar explicitos.
 
-Para mudar o limite de palavras, altere o padrao em `subtitles.py` e atualize os testes e documentos.
+Para mudar palavras por entrada ou caracteres por linha, altere os padroes em `subtitles.py` e atualize os testes e documentos.
 
 ## Limitacoes
 

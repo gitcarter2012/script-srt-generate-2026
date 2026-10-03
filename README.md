@@ -32,7 +32,7 @@ Para cada `video.mp4`, o script grava na mesma pasta:
 - `video_sem_traducao.srt`: transcricao original;
 - `video.srt`: traducao premium para portugues brasileiro.
 
-Cada entrada possui no maximo seis palavras. As palavras sao balanceadas entre entradas para evitar uma cauda de uma palavra e duracao muito curta. No faster-whisper, os limites de cada legenda sao recortados pela primeira e pela ultima palavra realmente faladas, e pausas internas acima de 2,5 segundos iniciam uma nova entrada. O terminal mostra o progresso real da transcricao conforme o audio e processado e o progresso de cada lote DeepL.
+Cada entrada preserva ate 12 palavras em no maximo duas linhas de 40 caracteres. As quebras sao balanceadas, favorecem pontuacao e evitam terminar a primeira linha em artigos ou preposicoes. Frases maiores sao repartidas sem deixar uma cauda isolada de uma ou duas palavras. No faster-whisper, os limites de cada legenda sao recortados pela primeira e pela ultima palavra realmente faladas, e pausas internas acima de 2,5 segundos iniciam uma nova entrada. O terminal mostra o progresso real da transcricao conforme o audio e processado e o progresso de cada lote DeepL.
 
 ## Primeira execucao
 
@@ -82,7 +82,7 @@ Preencha `config.json`:
 
 Alternativamente, use `$env:DEEPL_API_KEY = "sua-chave"`. Sem ambos, a chave e solicitada com entrada oculta. Contas DeepL API Free e Pro sao detectadas automaticamente.
 
-O projeto envia lotes nativos ao DeepL usando `PT-BR`, contexto entre falas, tom menos formal e modelo otimizado para qualidade. Credenciais, cota e erros de rede sao reportados sem substituir silenciosamente a traducao.
+O projeto envia lotes nativos ao DeepL usando `PT-BR`, as falas anteriores e posteriores como contexto, tom menos formal e modelo otimizado para qualidade. A frase completa e traduzida antes de ser diagramada em ate duas linhas. Credenciais, cota e erros de rede sao reportados sem substituir silenciosamente a traducao.
 
 ## Linha de comando
 

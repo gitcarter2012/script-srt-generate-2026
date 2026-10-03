@@ -5,7 +5,13 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-from gerar_srt import DeepLCloudTranslator, get_deepl_api_key, split_segments_by_word_limit, translate_packed_batch
+from gerar_srt import (
+    DeepLCloudTranslator,
+    get_deepl_api_key,
+    split_segments_by_word_limit,
+    translate_packed_batch,
+    translate_segments_strict,
+)
 from srt_generator.cli import choose_source_language
 from srt_generator.runtime import choose_execution_profile, configure_huggingface_downloads
 from srt_generator.subtitles import write_srt
@@ -487,18 +493,57 @@ class TranscriptionProgressTests(unittest.TestCase):
 
 
 class SubtitleWordLimitTests(unittest.TestCase):
-    def test_starts_new_caption_after_six_words(self) -> None:
+    def test_keeps_semantic_caption_in_two_balanced_lines(self) -> None:
         segments = [{
             "start": 0.0,
-            "end": 9.0,
-            "text": "um dois tres quatro cinco seis sete oito nove",
+            "end": 6.0,
+            "text": "Tem um monte de palavras importantes para manter juntas nesta frase",
         }]
 
         result = split_segments_by_word_limit(segments)
 
-        self.assertEqual(result[0]["text"], "um dois tres quatro cinco")
-        self.assertEqual(result[1]["text"], "seis sete oito nove")
-        self.assertEqual(result[0]["end"], result[1]["start"])
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["text"], "Tem um monte de palavras importantes\npara manter juntas nesta frase")
+
+    def test_balances_caption_instead_of_leaving_one_word_tail(self) -> None:
+        segments = [{
+            "start": 0.0,
+            "end": 7.0,
+            "text": "um dois tres quatro cinco seis sete oito nove dez onze doze treze",
+        }]
+
+        result = split_segments_by_word_limit(segments)
+
+        self.assertEqual(len(result), 2)
+        chunk_sizes = [len(segment["text"].replace("\n", " ").split()) for segment in result]
+        self.assertEqual(sorted(chunk_sizes), [6, 7])
+
+    def test_prefers_punctuation_for_line_break(self) -> None:
+        segments = [{
+            "start": 0.0,
+            "end": 5.0,
+            "text": "Esta frase termina aqui. A próxima ideia continua depois",
+        }]
+
+        result = split_segments_by_word_limit(segments, max_line_characters=31)
+
+        self.assertEqual(result[0]["text"], "Esta frase termina aqui.\nA próxima ideia continua depois")
+
+    def test_splits_at_punctuation_instead_of_ending_line_with_connector(self) -> None:
+        segments = [{
+            "start": 0.0,
+            "end": 6.0,
+            "text": "Debaixo do uniforme... não era isso que você tava imaginando? Que sensação...",
+        }]
+
+        result = split_segments_by_word_limit(segments)
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0]["text"], "Debaixo do uniforme...")
+        self.assertEqual(
+            result[1]["text"],
+            "não era isso que você tava imaginando?\nQue sensação...",
+        )
 
     def test_uses_real_word_timestamps_for_original_srt(self) -> None:
         words = [
@@ -515,9 +560,7 @@ class SubtitleWordLimitTests(unittest.TestCase):
         result = split_segments_by_word_limit(segments, use_word_timestamps=True)
 
         self.assertEqual(result[0]["start"], 0.0)
-        self.assertEqual(result[0]["end"], 2.3)
-        self.assertEqual(result[1]["start"], 2.5)
-        self.assertEqual(result[1]["end"], 4.3)
+        self.assertEqual(result[0]["end"], 4.3)
 
     def test_trims_short_caption_to_spoken_word_timestamps(self) -> None:
         segments = [{
@@ -556,6 +599,16 @@ class SubtitleWordLimitTests(unittest.TestCase):
         self.assertIn("\n\n2\n00:00:02,000", content)
         self.assertNotIn("\n\n3\n", content)
 
+    def test_srt_preserves_balanced_line_break(self) -> None:
+        segments = [{"start": 0.0, "end": 2.0, "text": "primeira linha\nsegunda linha"}]
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output_path = Path(temporary_directory) / "output.srt"
+
+            write_srt(segments, output_path)
+
+            content = output_path.read_text(encoding="utf-8")
+        self.assertIn("\nprimeira linha\nsegunda linha\n", content)
+
 
 class FakeResponse:
     def __init__(self, status_code: int, payload: dict[str, object]) -> None:
@@ -571,6 +624,33 @@ class FakeResponse:
 
 
 class DeepLCloudTranslatorTests(unittest.TestCase):
+    def test_sends_neighboring_dialogue_as_context_without_changing_alignment(self) -> None:
+        texts = ("zero", "um", "dois", "tres", "quatro", "cinco", "seis", "sete")
+        segments = [
+            {"start": float(index), "end": float(index + 1), "text": text}
+            for index, text in enumerate(texts)
+        ]
+        translator = Mock()
+        translator.translate_many.side_effect = lambda texts, context=None: [
+            f"pt:{text}" for text in texts
+        ]
+
+        result = translate_segments_strict(
+            segments,
+            lambda: translator,
+            min_interval_seconds=0.0,
+            max_batch_items=1,
+        )
+
+        self.assertEqual(
+            [segment["text"] for segment in result],
+            [f"pt:{text}" for text in texts],
+        )
+        second_context = translator.translate_many.call_args_list[1].kwargs["context"]
+        seventh_context = translator.translate_many.call_args_list[6].kwargs["context"]
+        self.assertEqual(second_context, "zero\num\ndois\ntres\nquatro")
+        self.assertEqual(seventh_context, "tres\nquatro\ncinco\nseis\nsete")
+
     @patch("requests.post")
     def test_uses_free_endpoint_and_brazilian_portuguese(self, post: object) -> None:
         post.return_value = FakeResponse(200, {"translations": [{"text": "Ola, mundo."}]})
