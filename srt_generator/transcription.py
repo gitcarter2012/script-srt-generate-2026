@@ -1,3 +1,4 @@
+import importlib
 from pathlib import Path
 from typing import Callable
 
@@ -92,3 +93,57 @@ class FasterWhisperTranscriber:
         if on_progress:
             on_progress(total_duration, total_duration)
         return normalized_segments
+
+
+class LegacyWhisperTranscriber:
+    def __init__(self, model_name: str, device: str) -> None:
+        import whisper
+
+        self.model_name = model_name
+        self.device = device
+        self.compute_type = "float16" if device == "cuda" else "float32"
+        self.model = whisper.load_model(model_name, device=device)
+
+    def transcribe(
+        self,
+        input_path: Path,
+        source_language: str,
+        on_progress: Callable[[float, float], None] | None = None,
+    ) -> list[dict[str, object]]:
+        whisper_transcribe = importlib.import_module("whisper.transcribe")
+
+        original_tqdm = whisper_transcribe.tqdm.tqdm
+
+        class ProgressAdapter:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                self.total = float(kwargs.get("total") or 1)
+                self.completed = 0.0
+
+            def __enter__(self) -> "ProgressAdapter":
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                if on_progress:
+                    on_progress(self.total / 100, self.total / 100)
+
+            def update(self, frames: int) -> None:
+                self.completed += frames
+                if on_progress:
+                    on_progress(min(self.completed, self.total) / 100, self.total / 100)
+
+        whisper_transcribe.tqdm.tqdm = ProgressAdapter
+        try:
+            result = self.model.transcribe(
+                str(input_path),
+                language=source_language,
+                fp16=self.device == "cuda",
+                verbose=False,
+                word_timestamps=True,
+                condition_on_previous_text=False,
+                hallucination_silence_threshold=2.0,
+                temperature=(0.0, 0.2, 0.4),
+                beam_size=5,
+            )
+        finally:
+            whisper_transcribe.tqdm.tqdm = original_tqdm
+        return [segment.copy() for segment in result.get("segments", [])]

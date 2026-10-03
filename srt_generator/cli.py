@@ -4,7 +4,13 @@ import tkinter as tk
 from tkinter import filedialog
 
 from .config import get_deepl_api_key
-from .runtime import choose_device_mode, ensure_dependencies, resolve_device
+from .runtime import (
+    choose_execution_profile,
+    ensure_dependencies,
+    ensure_transcription_dependencies,
+    resolve_device,
+    resolve_legacy_device,
+)
 
 
 def choose_source_language(default_language: str) -> str:
@@ -36,9 +42,10 @@ def select_input_files() -> list[str]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Gerar SRT com faster-whisper e DeepL.")
+    parser = argparse.ArgumentParser(description="Gerar SRT com faster-whisper ou Whisper antigo e DeepL.")
     parser.add_argument("input", nargs="*", help="Caminho(s) de video/audio")
-    parser.add_argument("--model", default="large-v3", help="Modelo faster-whisper (padrao: large-v3)")
+    parser.add_argument("--engine", choices=["ask", "faster", "legacy"], default="ask")
+    parser.add_argument("--model", default=None, help="Modelo Whisper; padrao: large-v3 (faster) ou medium (antigo)")
     parser.add_argument("--source", default="en", help="Idioma do audio (padrao: en)")
     parser.add_argument("--target", default="pt", help="Idioma da traducao (padrao: pt)")
     parser.add_argument("--output", default=None, help="Nome base da saida, apenas para um arquivo")
@@ -54,12 +61,18 @@ def main() -> None:
     from rich.console import Console
     from .media import get_media_duration_seconds
     from .pipeline import process_file
-    from .transcription import FasterWhisperTranscriber
+    from .transcription import FasterWhisperTranscriber, LegacyWhisperTranscriber
     from .translation import DeepLCloudTranslator
     from .ui import print_header, print_selected_files_table
 
     api_key = get_deepl_api_key()
-    preferred_mode = choose_device_mode() if args.device == "ask" else args.device
+    if args.engine == "ask":
+        engine, preferred_mode = choose_execution_profile()
+    else:
+        engine = args.engine
+        preferred_mode = "auto" if args.device == "ask" else args.device
+    model_name = args.model or ("medium" if engine == "legacy" else "large-v3")
+    ensure_transcription_dependencies(engine, preferred_mode)
     source_language = choose_source_language(args.source) if args.source_menu == "on" else args.source
     input_values = args.input if args.input else select_input_files()
     if not input_values:
@@ -73,9 +86,12 @@ def main() -> None:
     if args.output and len(input_paths) > 1:
         raise ValueError("Use --output apenas com um arquivo de entrada.")
 
-    device, compute_type, device_name = resolve_device(preferred_mode)
+    if engine == "legacy":
+        device, compute_type, device_name = resolve_legacy_device(preferred_mode)
+    else:
+        device, compute_type, device_name = resolve_device(preferred_mode)
     console = Console(highlight=False)
-    print_header(console, args.model, source_language, args.target, device_name)
+    print_header(console, model_name, source_language, args.target, device_name, engine)
     console.print(f"[cyan]Compute type:[/cyan] {compute_type}")
     durations = {path: get_media_duration_seconds(path) for path in input_paths}
     print_selected_files_table(console, input_paths, durations)
@@ -84,8 +100,11 @@ def main() -> None:
         console.print("[yellow]CUDA falhou ao carregar o modelo; alternando para CPU int8.[/yellow]")
         console.print(f"[bright_black]{error}[/bright_black]")
 
-    console.print(f"[cyan]Carregando modelo {args.model}. Na primeira execucao ele sera baixado automaticamente.[/cyan]")
-    transcriber = FasterWhisperTranscriber(args.model, device, compute_type, show_fallback)
+    console.print(f"[cyan]Carregando modelo {model_name}. Na primeira execucao ele sera baixado automaticamente.[/cyan]")
+    if engine == "legacy":
+        transcriber = LegacyWhisperTranscriber(model_name, device)
+    else:
+        transcriber = FasterWhisperTranscriber(model_name, device, compute_type, show_fallback)
     console.print(f"[green]Modelo pronto em {transcriber.device.upper()} ({transcriber.compute_type}).[/green]")
     create_translator = lambda: DeepLCloudTranslator(api_key, source_language, args.target)
 

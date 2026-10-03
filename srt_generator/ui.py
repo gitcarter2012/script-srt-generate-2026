@@ -3,13 +3,21 @@ from pathlib import Path
 from .media import format_seconds
 
 
-def print_header(console: object, model_name: str, source: str, target: str, device: str) -> None:
+def print_header(
+    console: object,
+    model_name: str,
+    source: str,
+    target: str,
+    device: str,
+    engine: str = "faster",
+) -> None:
     from rich.panel import Panel
 
     console.print(
         Panel.fit(
             f"[bold cyan]Gerador de SRT[/bold cyan]\n"
-            f"Motor: [bold]faster-whisper[/bold] | Modelo: [bold]{model_name}[/bold] | "
+            f"Motor: [bold]{'Whisper antigo' if engine == 'legacy' else 'faster-whisper'}[/bold] | "
+            f"Modelo: [bold]{model_name}[/bold] | "
             f"Origem: [bold]{source}[/bold] | Destino: [bold]{target}[/bold] | "
             f"Dispositivo: [bold]{device.upper()}[/bold]",
             border_style="bright_blue",

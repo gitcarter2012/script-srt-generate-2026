@@ -1,6 +1,6 @@
 # Gerador de legenda SRT
 
-Transcreve audio e video com faster-whisper, gera a legenda original e traduz para portugues brasileiro com DeepL Cloud.
+Transcreve audio e video com faster-whisper ou com o OpenAI Whisper antigo, gera a legenda original e traduz para portugues brasileiro com DeepL Cloud.
 
 ## Uso rapido
 
@@ -12,6 +12,13 @@ python .\gerar_srt.py
 
 Sem argumentos, uma janela permite selecionar varios arquivos. Tambem e possivel dar duplo clique em `executar_para_selecionar_videos.bat`.
 
+O primeiro menu apresenta quatro perfis:
+
+1. faster-whisper + GPU automatica: melhor qualidade com `large-v3`, mais rapido e recomendado;
+2. faster-whisper + CPU: mesma qualidade, funciona sem NVIDIA e e mais lento;
+3. Whisper antigo + GPU NVIDIA: boa qualidade com `medium` e compatibilidade com o fluxo antigo;
+4. Whisper antigo + CPU: boa qualidade e maxima compatibilidade, mas muito lento.
+
 Para cada `video.mp4`, o script grava na mesma pasta:
 
 - `video_sem_traducao.srt`: transcricao original;
@@ -21,15 +28,17 @@ Cada entrada possui no maximo oito palavras. O terminal mostra o progresso real 
 
 ## Primeira execucao
 
-O script instala automaticamente:
+O script sempre instala automaticamente:
 
-- `faster-whisper==1.2.1`, que inclui CTranslate2 e PyAV;
 - `requests`, para a API DeepL;
 - `rich`, para a interface no terminal.
 
-Nao e necessario instalar PyTorch nem FFmpeg no sistema. O PyAV distribuido com faster-whisper decodifica a midia.
+Depois da escolha, instala apenas o backend necessario:
 
-O modelo padrao `large-v3` e baixado automaticamente e mantido em `%LOCALAPPDATA%\generate-srt\models`. O primeiro download requer internet e pode demorar.
+- faster-whisper: `faster-whisper==1.2.1`, CTranslate2 e PyAV;
+- Whisper antigo: `openai-whisper`, PyTorch e `imageio-ffmpeg`.
+
+O modelo tambem e baixado automaticamente. O faster-whisper usa `large-v3` por padrao e guarda o cache em `%LOCALAPPDATA%\generate-srt\models`. O Whisper antigo usa `medium` por padrao.
 
 ## CPU e NVIDIA
 
@@ -40,6 +49,8 @@ No modo automatico, o script detecta a GPU com `nvidia-smi`:
 - CUDA indisponivel ou incompatibilidade de DLL/modelo: informa o motivo e continua em CPU.
 
 No Windows com NVIDIA, o script tenta instalar `nvidia-cublas-cu12` e `nvidia-cudnn-cu12` quando necessario. O driver NVIDIA deve estar instalado pelo fabricante; o script nao instala drivers do sistema.
+
+Para o Whisper antigo com GPU, o script instala uma build CUDA compativel do PyTorch e reinicia automaticamente para carregar as novas DLLs. Se CUDA nao ficar disponivel, continua em CPU.
 
 ## Chave DeepL
 
@@ -60,13 +71,15 @@ O projeto envia lotes nativos ao DeepL usando `PT-BR`, contexto entre falas, tom
 ```powershell
 python .\gerar_srt.py .\video.mp4
 python .\gerar_srt.py .\video1.mp4 .\video2.mp4
-python .\gerar_srt.py .\video.mp4 --device cpu --source en --source-menu off
-python .\gerar_srt.py .\video.mp4 --model medium --output legenda_final
+python .\gerar_srt.py .\video.mp4 --engine faster --device cpu --source en --source-menu off
+python .\gerar_srt.py .\video.mp4 --engine legacy --device cuda
+python .\gerar_srt.py .\video.mp4 --engine faster --model medium --output legenda_final
 ```
 
 Opcoes principais:
 
-- `--model`: modelo faster-whisper; padrao `large-v3`;
+- `--engine`: `ask`, `faster` ou `legacy`; `ask` abre o menu completo;
+- `--model`: modelo Whisper; padrao `large-v3` no faster ou `medium` no antigo;
 - `--device`: `ask`, `auto`, `cuda` ou `cpu`;
 - `--source`: idioma do audio; padrao `en`;
 - `--target`: idioma de destino; padrao `pt`, enviado como `PT-BR`;

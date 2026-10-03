@@ -1,10 +1,12 @@
+import importlib
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
 from gerar_srt import DeepLCloudTranslator, get_deepl_api_key, split_segments_by_word_limit, translate_packed_batch
-from srt_generator.transcription import FasterWhisperTranscriber
+from srt_generator.runtime import choose_execution_profile
+from srt_generator.transcription import FasterWhisperTranscriber, LegacyWhisperTranscriber
 
 
 class FakeWord:
@@ -32,6 +34,49 @@ class FakeModel:
     def transcribe(self, *args: object, **kwargs: object) -> tuple[object, FakeInfo]:
         self.transcribe_kwargs = kwargs
         return iter([FakeSegment()]), FakeInfo()
+
+
+class FakeLegacyModel:
+    def __init__(self) -> None:
+        self.transcribe_kwargs: dict[str, object] = {}
+
+    def transcribe(self, *args: object, **kwargs: object) -> dict[str, object]:
+        whisper_transcribe = importlib.import_module("whisper.transcribe")
+
+        self.transcribe_kwargs = kwargs
+        with whisper_transcribe.tqdm.tqdm(total=100) as progress:
+            progress.update(40)
+            progress.update(60)
+        return {"segments": [{"start": 0.0, "end": 1.0, "text": " Hello"}]}
+
+
+class ExecutionProfileTests(unittest.TestCase):
+    def test_maps_all_execution_profiles(self) -> None:
+        expected = {
+            "": ("faster", "auto"),
+            "1": ("faster", "auto"),
+            "2": ("faster", "cpu"),
+            "3": ("legacy", "cuda"),
+            "4": ("legacy", "cpu"),
+        }
+        for choice, profile in expected.items():
+            with (
+                self.subTest(choice=choice),
+                patch("builtins.input", return_value=choice),
+                patch("builtins.print"),
+            ):
+                self.assertEqual(choose_execution_profile(), profile)
+
+    @patch("builtins.input", return_value="1")
+    @patch("builtins.print")
+    def test_describes_quality_and_hardware(self, print_mock: Mock, input_mock: Mock) -> None:
+        choose_execution_profile()
+
+        menu_text = "\n".join(str(item.args[0]) for item in print_mock.call_args_list)
+        self.assertIn("Melhor qualidade", menu_text)
+        self.assertIn("GPU NVIDIA", menu_text)
+        self.assertIn("Whisper antigo", menu_text)
+        self.assertIn("muito lenta", menu_text)
 
 
 class TranscriptionProgressTests(unittest.TestCase):
@@ -91,6 +136,30 @@ class TranscriptionProgressTests(unittest.TestCase):
             [item.kwargs["device"] for item in whisper_model.call_args_list],
             ["cuda", "cpu"],
         )
+
+    def test_reports_legacy_whisper_progress_and_options(self) -> None:
+        whisper_transcribe = importlib.import_module("whisper.transcribe")
+
+        model = FakeLegacyModel()
+        progress_events = []
+        original_tqdm = whisper_transcribe.tqdm.tqdm
+        transcriber = LegacyWhisperTranscriber.__new__(LegacyWhisperTranscriber)
+        transcriber.model = model
+        transcriber.device = "cpu"
+
+        result = transcriber.transcribe(
+            Path("video.mp4"),
+            "en",
+            lambda current, total: progress_events.append((current, total)),
+        )
+
+        self.assertEqual(result[0]["text"], " Hello")
+        self.assertEqual(progress_events[-1], (1.0, 1.0))
+        self.assertIs(whisper_transcribe.tqdm.tqdm, original_tqdm)
+        self.assertFalse(model.transcribe_kwargs["fp16"])
+        self.assertTrue(model.transcribe_kwargs["word_timestamps"])
+        self.assertFalse(model.transcribe_kwargs["condition_on_previous_text"])
+        self.assertEqual(model.transcribe_kwargs["beam_size"], 5)
 
 
 class SubtitleWordLimitTests(unittest.TestCase):

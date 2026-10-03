@@ -7,7 +7,6 @@ import sys
 
 
 COMMON_DEPENDENCIES = {
-    "faster_whisper": "faster-whisper==1.2.1",
     "requests": "requests",
     "rich": "rich",
 }
@@ -24,6 +23,78 @@ def ensure_dependencies() -> None:
         print("Instalando dependencias ausentes:", ", ".join(missing_packages))
         subprocess.check_call([sys.executable, "-m", "pip", "install", *missing_packages])
         importlib.invalidate_caches()
+
+
+def ensure_transcription_dependencies(engine: str, preferred_mode: str) -> None:
+    if engine == "faster":
+        try:
+            importlib.import_module("faster_whisper")
+        except ModuleNotFoundError:
+            print("Instalando faster-whisper...")
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "faster-whisper==1.2.1"])
+        importlib.invalidate_caches()
+        return
+
+    legacy_dependencies = {
+        "whisper": "openai-whisper",
+        "imageio_ffmpeg": "imageio-ffmpeg",
+        "torch": "torch",
+    }
+    missing_packages = []
+    for module_name, package_name in legacy_dependencies.items():
+        try:
+            importlib.import_module(module_name)
+        except ModuleNotFoundError:
+            missing_packages.append(package_name)
+    if missing_packages:
+        print("Instalando dependencias do Whisper antigo:", ", ".join(missing_packages))
+        subprocess.check_call([sys.executable, "-m", "pip", "install", *missing_packages])
+        importlib.invalidate_caches()
+    configure_legacy_ffmpeg()
+    if preferred_mode != "cpu":
+        ensure_legacy_torch_cuda()
+
+
+def configure_legacy_ffmpeg() -> None:
+    if shutil.which("ffmpeg"):
+        return
+    imageio_ffmpeg = importlib.import_module("imageio_ffmpeg")
+    ffmpeg_path = Path(imageio_ffmpeg.get_ffmpeg_exe())
+    os.environ["PATH"] = str(ffmpeg_path.parent) + os.pathsep + os.environ.get("PATH", "")
+
+
+def ensure_legacy_torch_cuda() -> None:
+    if not get_nvidia_gpu_name():
+        return
+    torch = importlib.import_module("torch")
+    if torch.cuda.is_available():
+        return
+    if os.environ.get("GENERATE_SRT_LEGACY_CUDA_ATTEMPTED") == "1":
+        print("PyTorch CUDA continua indisponivel apos a instalacao. O Whisper antigo usara CPU.")
+        return
+    os.environ["GENERATE_SRT_LEGACY_CUDA_ATTEMPTED"] = "1"
+    print("Preparando PyTorch com CUDA para o Whisper antigo...")
+    for index_name in ("cu128", "cu126", "cu124"):
+        try:
+            subprocess.check_call(
+                [
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    "--upgrade",
+                    "--force-reinstall",
+                    "torch",
+                    "--index-url",
+                    f"https://download.pytorch.org/whl/{index_name}",
+                ]
+            )
+            print("PyTorch CUDA instalado. Reiniciando o script para carregar as novas bibliotecas...")
+            script_path = str(Path(sys.argv[0]).resolve())
+            raise SystemExit(subprocess.call([sys.executable, script_path, *sys.argv[1:]]))
+        except subprocess.CalledProcessError:
+            print(f"PyTorch CUDA {index_name} nao foi instalado; tentando outra versao.")
+    print("Nao foi possivel preparar PyTorch CUDA. O Whisper antigo usara CPU.")
 
 
 def get_nvidia_gpu_name() -> str | None:
@@ -96,15 +167,35 @@ def resolve_device(preferred_mode: str) -> tuple[str, str, str]:
     return "cpu", "int8", "CPU"
 
 
-def choose_device_mode() -> str:
-    print("\nEscolha o modo de execucao:")
-    print("  1) Automatico (GPU NVIDIA quando disponivel)")
-    print("  2) Somente CPU")
+def resolve_legacy_device(preferred_mode: str) -> tuple[str, str, str]:
+    torch = importlib.import_module("torch")
+    if preferred_mode != "cpu" and torch.cuda.is_available():
+        return "cuda", "float16", str(torch.cuda.get_device_name(0))
+    if preferred_mode != "cpu" and get_nvidia_gpu_name():
+        print("CUDA nao ficou disponivel no PyTorch. O Whisper antigo usara CPU.")
+    return "cpu", "float32", "CPU"
+
+
+def choose_execution_profile() -> tuple[str, str]:
+    print("\nEscolha o motor e o modo de execucao:")
+    print("  1) faster-whisper + GPU automatica [RECOMENDADO]")
+    print("     Melhor qualidade (large-v3), mais rapido; usa NVIDIA e cai para CPU se necessario.")
+    print("  2) faster-whisper + CPU")
+    print("     Melhor qualidade (large-v3), funciona sem NVIDIA; mais lento que GPU.")
+    print("  3) Whisper antigo + GPU NVIDIA")
+    print("     Boa qualidade (medium), compatibilidade com o fluxo antigo; mais pesado e mais lento.")
+    print("  4) Whisper antigo + CPU")
+    print("     Boa qualidade (medium), maxima compatibilidade; execucao muito lenta.")
     try:
-        choice = input("Digite 1 ou 2 [padrao 1]: ").strip()
+        choice = input("Digite 1, 2, 3 ou 4 [padrao 1]: ").strip()
     except EOFError:
-        return "auto"
-    return "cpu" if choice == "2" else "auto"
+        return "faster", "auto"
+    profiles = {
+        "2": ("faster", "cpu"),
+        "3": ("legacy", "cuda"),
+        "4": ("legacy", "cpu"),
+    }
+    return profiles.get(choice, ("faster", "auto"))
 
 
 def model_cache_dir() -> Path:
