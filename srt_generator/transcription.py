@@ -18,37 +18,69 @@ class FasterWhisperTranscriber:
         self.model_name = model_name
         self.device = device
         self.compute_type = compute_type
-
-        def create_model(target_device: str, target_compute_type: str) -> object:
-            return WhisperModel(
-                model_name,
-                device=target_device,
-                compute_type=target_compute_type,
-                download_root=str(model_cache_dir()),
-            )
+        self.on_device_fallback = on_device_fallback
+        self._model_class = WhisperModel
+        self._runtime_repair_attempted = False
 
         try:
-            self.model = create_model(device, compute_type)
+            self.model = self._create_model(device, compute_type)
         except (OSError, RuntimeError) as exc:
             if device != "cuda":
                 raise
             if try_install_nvidia_runtime():
                 try:
-                    self.model = create_model(device, compute_type)
+                    self.model = self._create_model(device, compute_type)
                     return
                 except (OSError, RuntimeError) as retry_exc:
                     exc = retry_exc
-            if on_device_fallback:
-                on_device_fallback(str(exc))
-            self.device = "cpu"
-            self.compute_type = "int8"
-            self.model = create_model("cpu", "int8")
+            self._fallback_to_cpu(exc)
+
+    def _create_model(self, device: str, compute_type: str) -> object:
+        return self._model_class(
+            self.model_name,
+            device=device,
+            compute_type=compute_type,
+            download_root=str(model_cache_dir()),
+        )
+
+    def _fallback_to_cpu(self, error: BaseException) -> None:
+        if self.on_device_fallback:
+            self.on_device_fallback(str(error))
+        self.device = "cpu"
+        self.compute_type = "int8"
+        self.model = self._create_model("cpu", "int8")
 
     def transcribe(
         self,
         input_path: Path,
         source_language: str,
         on_progress: Callable[[float, float], None] | None = None,
+    ) -> list[dict[str, object]]:
+        try:
+            return self._transcribe_once(input_path, source_language, on_progress)
+        except (OSError, RuntimeError) as exc:
+            if self.device != "cuda":
+                raise
+
+            error_text = str(exc).lower()
+            missing_cuda_library = any(name in error_text for name in ("cublas", "cudnn", "cuda", ".dll"))
+            if missing_cuda_library and not self._runtime_repair_attempted:
+                self._runtime_repair_attempted = True
+                if try_install_nvidia_runtime():
+                    try:
+                        self.model = self._create_model("cuda", "int8_float16")
+                        return self._transcribe_once(input_path, source_language, on_progress)
+                    except (OSError, RuntimeError) as retry_exc:
+                        exc = retry_exc
+
+            self._fallback_to_cpu(exc)
+            return self._transcribe_once(input_path, source_language, on_progress)
+
+    def _transcribe_once(
+        self,
+        input_path: Path,
+        source_language: str,
+        on_progress: Callable[[float, float], None] | None,
     ) -> list[dict[str, object]]:
         segments_generator, info = self.model.transcribe(
             str(input_path),

@@ -36,6 +36,15 @@ class FakeModel:
         return iter([FakeSegment()]), FakeInfo()
 
 
+class FailingLazyCudaModel:
+    def transcribe(self, *args: object, **kwargs: object) -> tuple[object, FakeInfo]:
+        def fail_during_iteration() -> object:
+            raise RuntimeError("Library cublas64_12.dll is not found or cannot be loaded")
+            yield
+
+        return fail_during_iteration(), FakeInfo()
+
+
 class FakeLegacyModel:
     def __init__(self) -> None:
         self.transcribe_kwargs: dict[str, object] = {}
@@ -123,6 +132,26 @@ class TranscriptionProgressTests(unittest.TestCase):
         install_runtime.assert_called_once_with()
         self.assertEqual(whisper_model.call_count, 2)
         self.assertTrue(all(item.kwargs["device"] == "cuda" for item in whisper_model.call_args_list))
+
+    @patch("srt_generator.transcription.try_install_nvidia_runtime", return_value=True)
+    @patch("faster_whisper.WhisperModel")
+    def test_repairs_cuda_failure_during_lazy_transcription(
+        self,
+        whisper_model: Mock,
+        install_runtime: Mock,
+    ) -> None:
+        whisper_model.side_effect = [FailingLazyCudaModel(), FakeModel()]
+        transcriber = FasterWhisperTranscriber("large-v3", "cuda", "int8_float16")
+
+        result = transcriber.transcribe(Path("video.mp4"), "ja")
+
+        self.assertEqual(result[0]["text"], "Hello")
+        self.assertEqual(transcriber.device, "cuda")
+        install_runtime.assert_called_once_with()
+        self.assertEqual(
+            [item.kwargs["device"] for item in whisper_model.call_args_list],
+            ["cuda", "cuda"],
+        )
 
     @patch("srt_generator.transcription.try_install_nvidia_runtime", return_value=False)
     @patch("faster_whisper.WhisperModel")

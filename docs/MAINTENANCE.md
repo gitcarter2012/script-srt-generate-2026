@@ -45,7 +45,9 @@ O menu retorna um par `(engine, preferred_mode)` para quatro perfis: faster GPU 
 
 No Windows, `try_install_nvidia_runtime()` tenta instalar cuBLAS CUDA 12 e cuDNN 9 pelos pacotes Python oficiais da NVIDIA e registra suas pastas `bin` no caminho de DLL da execucao. Um driver NVIDIA funcional continua sendo requisito externo. Falha de instalacao ou inicializacao nunca impede a execucao em CPU.
 
-`FasterWhisperTranscriber` ainda protege o carregamento do modelo: se CTranslate2 falhar apenas ao criar o modelo CUDA, recria o modelo em CPU int8. O modelo e baixado para `%LOCALAPPDATA%/generate-srt/models` e reutilizado.
+`configure_nvidia_dll_paths()` percorre todos os caminhos retornados por `site.getsitepackages()`, o site do usuario e tambem reutiliza `torch/lib` quando presente. Os objetos retornados por `os.add_dll_directory()` ficam vivos durante todo o processo; descartar esses handles remove o diretorio da busca de DLLs no Windows.
+
+`FasterWhisperTranscriber` protege tanto o carregamento quanto o consumo do gerador lazy. Se cuBLAS, cuDNN ou CUDA falharem no primeiro `encode`, prepara o runtime, recria o modelo e tenta GPU uma vez. Se ainda falhar, reinicia a transcricao em CPU int8. O modelo e baixado para `%LOCALAPPDATA%/generate-srt/models` e reutilizado.
 
 No motor legado, `ensure_legacy_torch_cuda()` tenta builds PyTorch `cu128`, `cu126` e `cu124`. Depois de trocar a build, reinicia o processo para que as DLLs CUDA sejam carregadas. `configure_legacy_ffmpeg()` disponibiliza o executavel do `imageio-ffmpeg` no `PATH` da execucao.
 

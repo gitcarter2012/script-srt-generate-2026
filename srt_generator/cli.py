@@ -97,7 +97,7 @@ def main() -> None:
     print_selected_files_table(console, input_paths, durations)
 
     def show_fallback(error: str) -> None:
-        console.print("[yellow]CUDA falhou ao carregar o modelo; alternando para CPU int8.[/yellow]")
+        console.print("[yellow]CUDA falhou durante a transcricao; alternando para CPU int8.[/yellow]")
         console.print(f"[bright_black]{error}[/bright_black]")
 
     console.print(f"[cyan]Carregando modelo {model_name}. Na primeira execucao ele sera baixado automaticamente.[/cyan]")

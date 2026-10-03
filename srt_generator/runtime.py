@@ -12,6 +12,9 @@ COMMON_DEPENDENCIES = {
     "rich": "rich",
 }
 
+_DLL_DIRECTORY_HANDLES: list[object] = []
+_CONFIGURED_DLL_DIRECTORIES: set[Path] = set()
+
 
 def ensure_dependencies() -> None:
     missing_packages = []
@@ -126,19 +129,29 @@ def get_nvidia_gpu_name() -> str | None:
 
 def configure_nvidia_dll_paths() -> None:
     try:
-        site_packages = Path(importlib.import_module("site").getsitepackages()[0])
-    except (ImportError, IndexError):
+        site_module = importlib.import_module("site")
+        site_packages_paths = [
+            *(Path(path) for path in site_module.getsitepackages()),
+            Path(site_module.getusersitepackages()),
+        ]
+    except (ImportError, AttributeError):
         return
-    candidates = [
-        site_packages / "nvidia" / "cublas" / "bin",
-        site_packages / "nvidia" / "cudnn" / "bin",
-    ]
+    candidates = []
+    for site_packages in site_packages_paths:
+        candidates.extend(
+            [
+                site_packages / "nvidia" / "cublas" / "bin",
+                site_packages / "nvidia" / "cudnn" / "bin",
+                site_packages / "torch" / "lib",
+            ]
+        )
     for directory in candidates:
-        if not directory.exists():
+        if not directory.exists() or directory in _CONFIGURED_DLL_DIRECTORIES:
             continue
         os.environ["PATH"] = str(directory) + os.pathsep + os.environ.get("PATH", "")
         if hasattr(os, "add_dll_directory"):
-            os.add_dll_directory(str(directory))
+            _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(str(directory)))
+        _CONFIGURED_DLL_DIRECTORIES.add(directory)
 
 
 def try_install_nvidia_runtime() -> bool:
