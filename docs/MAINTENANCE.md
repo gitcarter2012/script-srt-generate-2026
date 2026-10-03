@@ -36,6 +36,8 @@ flowchart TD
 
 O menu retorna um par `(engine, preferred_mode)` para quatro perfis: faster GPU automatica, faster CPU, legado GPU e legado CPU. Via CLI, `--engine` e `--device` evitam o menu.
 
+`configure_huggingface_downloads()` desativa o aviso de symlinks pela variavel oficial `HF_HUB_DISABLE_SYMLINKS_WARNING` e reduz o logger do Hub para `ERROR`. O modelo e publico e nao exige `HF_TOKEN`; excecoes reais de rede, cota ou disco continuam sendo propagadas.
+
 `resolve_device()` retorna dispositivo, compute type e nome de exibicao:
 
 - CPU: `cpu` e `int8`;

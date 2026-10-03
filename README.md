@@ -40,6 +40,8 @@ Depois da escolha, instala apenas o backend necessario:
 
 O modelo tambem e baixado automaticamente. O faster-whisper usa `large-v3` por padrao e guarda o cache em `%LOCALAPPDATA%\generate-srt\models`. O Whisper antigo usa `medium` por padrao.
 
+O modelo publico do Hugging Face nao exige `HF_TOKEN`. No Windows sem suporte a symlinks, o cache continua funcionando e pode apenas ocupar mais espaco; esses dois avisos informativos sao ocultados pelo script.
+
 ## CPU e NVIDIA
 
 No modo automatico, o script detecta a GPU com `nvidia-smi`:

@@ -1,4 +1,5 @@
 import importlib
+import logging
 import os
 from pathlib import Path
 import shutil
@@ -27,12 +28,14 @@ def ensure_dependencies() -> None:
 
 def ensure_transcription_dependencies(engine: str, preferred_mode: str) -> None:
     if engine == "faster":
+        configure_huggingface_downloads()
         try:
             importlib.import_module("faster_whisper")
         except ModuleNotFoundError:
             print("Instalando faster-whisper...")
             subprocess.check_call([sys.executable, "-m", "pip", "install", "faster-whisper==1.2.1"])
         importlib.invalidate_caches()
+        configure_huggingface_downloads()
         return
 
     legacy_dependencies = {
@@ -53,6 +56,16 @@ def ensure_transcription_dependencies(engine: str, preferred_mode: str) -> None:
     configure_legacy_ffmpeg()
     if preferred_mode != "cpu":
         ensure_legacy_torch_cuda()
+
+
+def configure_huggingface_downloads() -> None:
+    os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+    logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
+    try:
+        hub_logging = importlib.import_module("huggingface_hub.utils.logging")
+    except ModuleNotFoundError:
+        return
+    hub_logging.set_verbosity_error()
 
 
 def configure_legacy_ffmpeg() -> None:

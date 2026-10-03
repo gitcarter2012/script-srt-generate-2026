@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from gerar_srt import DeepLCloudTranslator, get_deepl_api_key, split_segments_by_word_limit, translate_packed_batch
-from srt_generator.runtime import choose_execution_profile
+from srt_generator.runtime import choose_execution_profile, configure_huggingface_downloads
 from srt_generator.transcription import FasterWhisperTranscriber, LegacyWhisperTranscriber
 
 
@@ -77,6 +77,16 @@ class ExecutionProfileTests(unittest.TestCase):
         self.assertIn("GPU NVIDIA", menu_text)
         self.assertIn("Whisper antigo", menu_text)
         self.assertIn("muito lenta", menu_text)
+
+    @patch.dict("os.environ", {}, clear=True)
+    def test_configures_quiet_huggingface_downloads(self) -> None:
+        configure_huggingface_downloads()
+
+        import os
+        from huggingface_hub.utils import logging as hub_logging
+
+        self.assertEqual(os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"], "1")
+        self.assertEqual(hub_logging.get_verbosity(), hub_logging.ERROR)
 
 
 class TranscriptionProgressTests(unittest.TestCase):
