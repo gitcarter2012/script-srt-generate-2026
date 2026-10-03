@@ -61,7 +61,7 @@ O faster-whisper usa `large-v3` por padrao e o legado usa `medium`. Ambos recebe
 - temperaturas `0.0`, `0.2` e `0.4`;
 - limites de compressao, probabilidade, silencio e alucinacao.
 
-O faster-whisper usa timestamps por palavra, Silero VAD e devolve um gerador lazy. Os blocos VAD possuem no maximo 15 segundos para preservar falas baixas que poderiam ser descartadas em janelas longas. `transcribe()` deve consumir o gerador para que o trabalho aconteca. Cada segmento e normalizado para dicionarios independentes da biblioteca e dividido quando o intervalo entre palavras supera 2,5 segundos. O progresso e calculado por `segment.end / info.duration`.
+O faster-whisper usa timestamps por palavra, Silero VAD e devolve um gerador lazy. Os blocos VAD possuem no maximo 15 segundos para preservar falas baixas que poderiam ser descartadas em janelas longas. `transcribe()` deve consumir o gerador para que o trabalho aconteca. Cada segmento e normalizado para dicionarios independentes da biblioteca e dividido quando o intervalo entre palavras supera 2,5 segundos. Fragmentos incompletos proximos sao reunidos antes da traducao, sem ultrapassar 7,5 segundos. O progresso e calculado por `segment.end / info.duration`.
 
 `LegacyWhisperTranscriber` detecta voz antes da transcricao, converte os intervalos em `clip_timestamps` e nao chama o modelo quando nao ha fala. Ele preserva timestamps por segmento para evitar o fallback DTW lento no Windows e adapta temporariamente seu `tqdm` interno para o callback Rich. O objeto original e restaurado em `finally`.
 
@@ -69,7 +69,7 @@ O primeiro menu escolhe explicitamente o idioma de origem: `1` para ingles, `2` 
 
 ## Legendas
 
-`split_segments_by_word_limit()` limita cada entrada a seis palavras. No faster-whisper, os segmentos ja sao recortados pela primeira e pela ultima palavra detectadas; a transcricao original tambem usa esses timestamps ao dividir entradas. Na traducao, reparte o intervalo proporcionalmente, pois a resposta DeepL nao possui alinhamento de audio.
+`split_segments_by_word_limit()` limita cada entrada a seis palavras e distribui os termos de forma balanceada entre os blocos, evitando divisoes como `6+1`. No faster-whisper, os segmentos ja sao recortados pela primeira e pela ultima palavra detectadas; a transcricao original tambem usa esses timestamps ao dividir entradas. Na traducao, reparte o intervalo proporcionalmente, pois a resposta DeepL nao possui alinhamento de audio.
 
 `write_srt()` e interno e grava UTF-8 com timestamps `HH:MM:SS,mmm`. Assim, o writer nao depende de openai-whisper.
 

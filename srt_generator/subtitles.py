@@ -1,4 +1,14 @@
 from pathlib import Path
+import math
+
+
+def _balanced_chunk_sizes(word_count: int, max_words: int) -> list[int]:
+    chunk_count = math.ceil(word_count / max_words)
+    base_size, larger_chunks = divmod(word_count, chunk_count)
+    return [
+        base_size + (1 if index < larger_chunks else 0)
+        for index in range(chunk_count)
+    ]
 
 
 def split_segments_by_word_limit(
@@ -23,9 +33,9 @@ def split_segments_by_word_limit(
         start = float(segment["start"])
         duration = float(segment["end"]) - start
         word_offset = 0
-        for chunk_start in range(0, len(words), max_words):
-            chunk = words[chunk_start:chunk_start + max_words]
-            next_word_offset = word_offset + len(chunk)
+        for chunk_size in _balanced_chunk_sizes(len(words), max_words):
+            next_word_offset = word_offset + chunk_size
+            chunk = words[word_offset:next_word_offset]
             chunk_segment = segment.copy()
             chunk_segment["text"] = " ".join(chunk)
             if has_word_timestamps:

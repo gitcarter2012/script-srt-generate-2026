@@ -6,6 +6,7 @@ from .runtime import model_cache_dir, try_install_nvidia_runtime
 
 
 MAX_WORD_GAP_SECONDS = 2.5
+MAX_MERGED_SEGMENT_SECONDS = 7.5
 
 
 def _split_segment_at_word_gaps(segment: Any, words: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -39,6 +40,37 @@ def _split_segment_at_word_gaps(segment: Any, words: list[dict[str, object]]) ->
         for group, text in zip(groups, text_by_group)
         if text
     ]
+
+
+def _merge_incomplete_nearby_segments(
+    segments: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    merged_segments: list[dict[str, object]] = []
+    for segment in segments:
+        if not merged_segments:
+            merged_segments.append(segment)
+            continue
+
+        previous = merged_segments[-1]
+        gap = float(segment["start"]) - float(previous["end"])
+        merged_duration = float(segment["end"]) - float(previous["start"])
+        previous_text = str(previous["text"]).rstrip()
+        if (
+            gap > MAX_WORD_GAP_SECONDS
+            or merged_duration > MAX_MERGED_SEGMENT_SECONDS
+            or previous_text.endswith((".", "!", "?", "…"))
+        ):
+            merged_segments.append(segment)
+            continue
+
+        previous["end"] = segment["end"]
+        previous["text"] = f"{previous_text} {str(segment['text']).lstrip()}"
+        previous_words = previous.get("words", [])
+        segment_words = segment.get("words", [])
+        if isinstance(previous_words, list) and isinstance(segment_words, list):
+            previous["words"] = [*previous_words, *segment_words]
+
+    return merged_segments
 
 
 class FasterWhisperTranscriber:
@@ -156,7 +188,7 @@ class FasterWhisperTranscriber:
 
         if on_progress:
             on_progress(total_duration, total_duration)
-        return normalized_segments
+        return _merge_incomplete_nearby_segments(normalized_segments)
 
 
 class LegacyWhisperTranscriber:

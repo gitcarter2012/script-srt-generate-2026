@@ -8,7 +8,11 @@ from gerar_srt import DeepLCloudTranslator, get_deepl_api_key, split_segments_by
 from srt_generator.cli import choose_source_language
 from srt_generator.runtime import choose_execution_profile, configure_huggingface_downloads
 from srt_generator.subtitles import write_srt
-from srt_generator.transcription import FasterWhisperTranscriber, LegacyWhisperTranscriber
+from srt_generator.transcription import (
+    FasterWhisperTranscriber,
+    LegacyWhisperTranscriber,
+    _merge_incomplete_nearby_segments,
+)
 
 
 class FakeWord:
@@ -69,6 +73,35 @@ class FakeModeratePauseModel(FakeModel):
     def transcribe(self, *args: object, **kwargs: object) -> tuple[object, FakeInfo]:
         self.transcribe_kwargs = kwargs
         return iter([FakeModeratePauseSegment()]), FakeInfo()
+
+
+class FakeSplitSentenceModel(FakeModel):
+    def transcribe(self, *args: object, **kwargs: object) -> tuple[object, FakeInfo]:
+        self.transcribe_kwargs = kwargs
+        first = type(
+            "Segment",
+            (),
+            {
+                "start": 1.0,
+                "end": 1.5,
+                "text": " I'm",
+                "words": [type("Word", (), {"word": " I'm", "start": 1.0, "end": 1.5, "probability": 0.9})()],
+            },
+        )()
+        second = type(
+            "Segment",
+            (),
+            {
+                "start": 3.5,
+                "end": 4.0,
+                "text": " not done",
+                "words": [
+                    type("Word", (), {"word": " not", "start": 3.5, "end": 3.7, "probability": 0.9})(),
+                    type("Word", (), {"word": " done", "start": 3.7, "end": 4.0, "probability": 0.9})(),
+                ],
+            },
+        )()
+        return iter([first, second]), FakeInfo()
 
 
 class FailingLazyCudaModel:
@@ -188,6 +221,26 @@ class TranscriptionProgressTests(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["text"], "I'm not done")
 
+    def test_merges_incomplete_sentence_returned_as_separate_segments(self) -> None:
+        transcriber = FasterWhisperTranscriber.__new__(FasterWhisperTranscriber)
+        transcriber.model = FakeSplitSentenceModel()
+
+        result = transcriber.transcribe(Path("video.mp4"), "en")
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["text"], "I'm not done")
+        self.assertEqual((result[0]["start"], result[0]["end"]), (1.0, 4.0))
+
+    def test_does_not_merge_incomplete_segments_past_duration_limit(self) -> None:
+        segments = [
+            {"start": 1.0, "end": 4.0, "text": "First", "words": []},
+            {"start": 4.2, "end": 9.0, "text": "second", "words": []},
+        ]
+
+        result = _merge_incomplete_nearby_segments(segments)
+
+        self.assertEqual(len(result), 2)
+
     @patch("srt_generator.transcription.try_install_nvidia_runtime", return_value=True)
     @patch("faster_whisper.WhisperModel")
     def test_retries_cuda_after_installing_runtime(self, whisper_model: Mock, install_runtime: Mock) -> None:
@@ -299,8 +352,8 @@ class SubtitleWordLimitTests(unittest.TestCase):
 
         result = split_segments_by_word_limit(segments)
 
-        self.assertEqual(result[0]["text"], "um dois tres quatro cinco seis")
-        self.assertEqual(result[1]["text"], "sete oito nove")
+        self.assertEqual(result[0]["text"], "um dois tres quatro cinco")
+        self.assertEqual(result[1]["text"], "seis sete oito nove")
         self.assertEqual(result[0]["end"], result[1]["start"])
 
     def test_uses_real_word_timestamps_for_original_srt(self) -> None:
@@ -318,8 +371,8 @@ class SubtitleWordLimitTests(unittest.TestCase):
         result = split_segments_by_word_limit(segments, use_word_timestamps=True)
 
         self.assertEqual(result[0]["start"], 0.0)
-        self.assertEqual(result[0]["end"], 2.8)
-        self.assertEqual(result[1]["start"], 3.0)
+        self.assertEqual(result[0]["end"], 2.3)
+        self.assertEqual(result[1]["start"], 2.5)
         self.assertEqual(result[1]["end"], 4.3)
 
     def test_trims_short_caption_to_spoken_word_timestamps(self) -> None:
