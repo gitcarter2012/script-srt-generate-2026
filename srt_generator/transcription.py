@@ -5,7 +5,7 @@ from typing import Any, Callable
 from .runtime import model_cache_dir, try_install_nvidia_runtime
 
 
-MAX_WORD_GAP_SECONDS = 1.2
+MAX_WORD_GAP_SECONDS = 2.5
 
 
 def _split_segment_at_word_gaps(segment: Any, words: list[dict[str, object]]) -> list[dict[str, object]]:

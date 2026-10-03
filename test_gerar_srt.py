@@ -35,6 +35,17 @@ class FakeGappedSegment:
     ]
 
 
+class FakeModeratePauseSegment:
+    start = 1.0
+    end = 4.0
+    text = " I'm not done"
+    words = [
+        type("Word", (), {"word": " I'm", "start": 1.0, "end": 1.5, "probability": 0.9})(),
+        type("Word", (), {"word": " not", "start": 3.5, "end": 3.7, "probability": 0.9})(),
+        type("Word", (), {"word": " done", "start": 3.7, "end": 4.0, "probability": 0.9})(),
+    ]
+
+
 class FakeInfo:
     duration = 4.0
 
@@ -52,6 +63,12 @@ class FakeGappedModel(FakeModel):
     def transcribe(self, *args: object, **kwargs: object) -> tuple[object, FakeInfo]:
         self.transcribe_kwargs = kwargs
         return iter([FakeGappedSegment()]), FakeInfo()
+
+
+class FakeModeratePauseModel(FakeModel):
+    def transcribe(self, *args: object, **kwargs: object) -> tuple[object, FakeInfo]:
+        self.transcribe_kwargs = kwargs
+        return iter([FakeModeratePauseSegment()]), FakeInfo()
 
 
 class FailingLazyCudaModel:
@@ -161,6 +178,15 @@ class TranscriptionProgressTests(unittest.TestCase):
             [(item["start"], item["end"], item["text"]) for item in result],
             [(1.0, 1.5, "First"), (22.0, 22.5, "second")],
         )
+
+    def test_keeps_sentence_together_across_moderate_pause(self) -> None:
+        transcriber = FasterWhisperTranscriber.__new__(FasterWhisperTranscriber)
+        transcriber.model = FakeModeratePauseModel()
+
+        result = transcriber.transcribe(Path("video.mp4"), "en")
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["text"], "I'm not done")
 
     @patch("srt_generator.transcription.try_install_nvidia_runtime", return_value=True)
     @patch("faster_whisper.WhisperModel")
