@@ -14,6 +14,7 @@ from srt_generator.transcription import (
     LegacyWhisperTranscriber,
     _filter_low_confidence_short_segments,
     _merge_incomplete_nearby_segments,
+    _remove_known_hallucinations,
     _rejoin_japanese_boundary_characters,
 )
 
@@ -288,6 +289,28 @@ class TranscriptionProgressTests(unittest.TestCase):
             ["昼も", "奥さんのおっぱい", "大きくなった"],
         )
         self.assertEqual(result[1]["start"], 10.0)
+
+    def test_rejoins_repeated_two_character_japanese_fragment(self) -> None:
+        segments = [
+            {"start": 1.0, "end": 2.0, "text": "いや どん", "words": []},
+            {"start": 10.0, "end": 11.0, "text": "どん固くなる", "words": []},
+        ]
+
+        result = _rejoin_japanese_boundary_characters(segments)
+
+        self.assertEqual([segment["text"] for segment in result], ["いや", "どんどん固くなる"])
+
+    def test_removes_known_japanese_hallucination_inside_speech(self) -> None:
+        segments = [{
+            "start": 1.0,
+            "end": 2.0,
+            "text": "お熱が出てますよ ご視聴ありがとうございました",
+            "words": [],
+        }]
+
+        result = _remove_known_hallucinations(segments)
+
+        self.assertEqual(result[0]["text"], "お熱が出てますよ")
 
     @patch("srt_generator.transcription.get_audio_duration_seconds", side_effect=[100.0, 100.0])
     @patch("srt_generator.transcription.get_media_duration_seconds", side_effect=[100.0, 100.0])

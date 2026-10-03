@@ -13,6 +13,7 @@ MIN_SHORT_SEGMENT_WORD_PROBABILITY = 0.2
 LONG_AUDIO_THRESHOLD_SECONDS = 1200
 TRANSCRIPTION_WINDOW_SECONDS = 300
 TRANSCRIPTION_WINDOW_OVERLAP_SECONDS = 5
+KNOWN_HALLUCINATION_PHRASES = ("ご視聴ありがとうございました",)
 
 
 def _split_segment_at_word_gaps(segment: Any, words: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -102,7 +103,14 @@ def _rejoin_japanese_boundary_characters(
     pending_character = ""
     for segment in segments:
         text = str(segment["text"]).strip()
-        if pending_character and re.match(r"[\u3040-\u30ff\u3400-\u9fff]", text):
+        should_rejoin = (
+            len(pending_character) == 1
+            and re.match(r"[\u3040-\u30ff\u3400-\u9fff]", text)
+        ) or (
+            len(pending_character) == 2
+            and text.startswith(pending_character)
+        )
+        if pending_character and should_rejoin:
             text = pending_character + text
             pending_character = ""
         elif pending_character:
@@ -110,7 +118,7 @@ def _rejoin_japanese_boundary_characters(
                 rejoined_segments[-1]["text"] = str(rejoined_segments[-1]["text"]) + pending_character
             pending_character = ""
 
-        trailing_character = re.search(r"(?:^|\s)([\u3040-\u30ff\u3400-\u9fff])$", text)
+        trailing_character = re.search(r"(?:^|\s)([\u3040-\u30ff\u3400-\u9fff]{1,2})$", text)
         if trailing_character:
             pending_character = trailing_character.group(1)
             text = text[:trailing_character.start()].rstrip()
@@ -123,6 +131,22 @@ def _rejoin_japanese_boundary_characters(
     if pending_character and rejoined_segments:
         rejoined_segments[-1]["text"] = str(rejoined_segments[-1]["text"]) + pending_character
     return rejoined_segments
+
+
+def _remove_known_hallucinations(
+    segments: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    cleaned_segments = []
+    for segment in segments:
+        text = str(segment["text"])
+        for phrase in KNOWN_HALLUCINATION_PHRASES:
+            text = text.replace(phrase, "")
+        text = " ".join(text.split())
+        if text:
+            cleaned_segment = segment.copy()
+            cleaned_segment["text"] = text
+            cleaned_segments.append(cleaned_segment)
+    return cleaned_segments
 
 
 class FasterWhisperTranscriber:
@@ -346,7 +370,8 @@ class FasterWhisperTranscriber:
     ) -> list[dict[str, object]]:
         merged_segments = _merge_incomplete_nearby_segments(normalized_segments)
         filtered_segments = _filter_low_confidence_short_segments(merged_segments)
-        return _rejoin_japanese_boundary_characters(filtered_segments)
+        cleaned_segments = _remove_known_hallucinations(filtered_segments)
+        return _rejoin_japanese_boundary_characters(cleaned_segments)
 
 
 class LegacyWhisperTranscriber:
