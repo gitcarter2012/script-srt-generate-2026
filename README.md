@@ -12,14 +12,20 @@ python .\gerar_srt.py
 
 Sem argumentos, uma janela permite selecionar varios arquivos. Tambem e possivel dar duplo clique em `executar_para_selecionar_videos.bat`.
 
-O primeiro menu apresenta quatro perfis:
+O primeiro menu escolhe o idioma falado no video:
+
+1. ingles;
+2. espanhol;
+3. japones.
+
+Depois, o menu de execucao apresenta quatro perfis:
 
 1. faster-whisper + GPU automatica: melhor qualidade com `large-v3`, mais rapido e recomendado;
 2. faster-whisper + CPU: mesma qualidade, funciona sem NVIDIA e e mais lento;
 3. Whisper antigo + GPU NVIDIA: boa qualidade com `medium` e compatibilidade com o fluxo antigo;
 4. Whisper antigo + CPU: boa qualidade e maxima compatibilidade, mas muito lento.
 
-No menu seguinte, pressione `Enter` para audio em ingles. Os demais idiomas usam letras (`J`, `S`, `P`) para nao serem confundidos com os numeros do menu de motor.
+Qualquer um dos motores pode processar os tres idiomas. O idioma escolhido e informado explicitamente ao Whisper e ao DeepL; `Enter` usa ingles como padrao.
 
 Para cada `video.mp4`, o script grava na mesma pasta:
 

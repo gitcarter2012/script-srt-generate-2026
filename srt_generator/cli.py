@@ -14,16 +14,15 @@ from .runtime import (
 
 
 def choose_source_language(default_language: str) -> str:
-    print("\nIdioma de origem do audio:")
-    print(f"  Enter) Ingles padrao ({default_language})")
-    print("  J) Japones (ja)")
-    print("  S) Espanhol (es)")
-    print("  P) Portugues (pt)")
+    print("\nEscolha o idioma falado no video:")
+    print("  1) Ingles [PADRAO]")
+    print("  2) Espanhol")
+    print("  3) Japones")
     try:
-        choice = input("Escolha Enter, J, S ou P: ").strip().lower()
+        choice = input("Digite 1, 2 ou 3 [padrao 1]: ").strip()
     except EOFError:
         return default_language
-    return {"": default_language, "j": "ja", "s": "es", "p": "pt"}.get(choice, default_language)
+    return {"": default_language, "1": "en", "2": "es", "3": "ja"}.get(choice, default_language)
 
 
 def select_input_files() -> list[str]:
@@ -65,7 +64,7 @@ def main() -> None:
     from .translation import DeepLCloudTranslator
     from .ui import print_header, print_selected_files_table
 
-    api_key = get_deepl_api_key()
+    source_language = choose_source_language(args.source) if args.source_menu == "on" else args.source
     if args.engine == "ask":
         engine, preferred_mode = choose_execution_profile()
     else:
@@ -73,7 +72,7 @@ def main() -> None:
         preferred_mode = "auto" if args.device == "ask" else args.device
     model_name = args.model or ("medium" if engine == "legacy" else "large-v3")
     ensure_transcription_dependencies(engine, preferred_mode)
-    source_language = choose_source_language(args.source) if args.source_menu == "on" else args.source
+    api_key = get_deepl_api_key()
     input_values = args.input if args.input else select_input_files()
     if not input_values:
         print("Nenhum arquivo selecionado.")

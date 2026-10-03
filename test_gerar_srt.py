@@ -62,15 +62,15 @@ class FakeLegacyModel:
 
 
 class ExecutionProfileTests(unittest.TestCase):
-    def test_language_menu_does_not_treat_profile_number_as_japanese(self) -> None:
-        with patch("builtins.input", return_value="1"), patch("builtins.print"):
-            self.assertEqual(choose_source_language("en"), "en")
-
-    def test_language_menu_uses_unambiguous_letters(self) -> None:
-        expected = {"": "en", "J": "ja", "s": "es", "P": "pt"}
+    def test_language_menu_supports_requested_source_languages(self) -> None:
+        expected = {"": "en", "1": "en", "2": "es", "3": "ja"}
         for choice, language in expected.items():
             with self.subTest(choice=choice), patch("builtins.input", return_value=choice), patch("builtins.print"):
                 self.assertEqual(choose_source_language("en"), language)
+
+    def test_language_menu_rejects_unsupported_choice(self) -> None:
+        with patch("builtins.input", return_value="4"), patch("builtins.print"):
+            self.assertEqual(choose_source_language("en"), "en")
 
     def test_maps_all_execution_profiles(self) -> None:
         expected = {

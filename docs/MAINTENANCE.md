@@ -65,7 +65,7 @@ O faster-whisper usa timestamps por palavra, Silero VAD e devolve um gerador laz
 
 `LegacyWhisperTranscriber` detecta voz antes da transcricao, converte os intervalos em `clip_timestamps` e nao chama o modelo quando nao ha fala. Ele preserva timestamps por segmento para evitar o fallback DTW lento no Windows e adapta temporariamente seu `tqdm` interno para o callback Rich. O objeto original e restaurado em `finally`.
 
-O menu de idioma usa letras para impedir que um numero repetido do menu de execucao altere o idioma acidentalmente: `Enter` mantem ingles, `J` seleciona japones, `S` espanhol e `P` portugues.
+O primeiro menu escolhe explicitamente o idioma de origem: `1` para ingles, `2` para espanhol e `3` para japones. O menu de motor vem depois e nao altera essa escolha. Ambos os adaptadores recebem o mesmo codigo de idioma, que tambem e usado como origem na chamada DeepL.
 
 ## Legendas
 
