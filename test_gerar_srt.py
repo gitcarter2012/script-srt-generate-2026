@@ -11,6 +11,7 @@ from srt_generator.subtitles import write_srt
 from srt_generator.transcription import (
     FasterWhisperTranscriber,
     LegacyWhisperTranscriber,
+    _filter_low_confidence_short_segments,
     _merge_incomplete_nearby_segments,
 )
 
@@ -240,6 +241,36 @@ class TranscriptionProgressTests(unittest.TestCase):
         result = _merge_incomplete_nearby_segments(segments)
 
         self.assertEqual(len(result), 2)
+
+    def test_filters_only_short_segments_with_very_low_confidence(self) -> None:
+        segments = [
+            {
+                "start": 1.0,
+                "end": 1.5,
+                "text": "Walking",
+                "words": [{"word": " Walking", "probability": 0.1}],
+            },
+            {
+                "start": 2.0,
+                "end": 2.5,
+                "text": "Yes",
+                "words": [{"word": " Yes", "probability": 0.9}],
+            },
+            {
+                "start": 3.0,
+                "end": 5.0,
+                "text": "long uncertain phrase",
+                "words": [
+                    {"word": " long", "probability": 0.1},
+                    {"word": " uncertain", "probability": 0.1},
+                    {"word": " phrase", "probability": 0.1},
+                ],
+            },
+        ]
+
+        result = _filter_low_confidence_short_segments(segments)
+
+        self.assertEqual([segment["text"] for segment in result], ["Yes", "long uncertain phrase"])
 
     @patch("srt_generator.transcription.try_install_nvidia_runtime", return_value=True)
     @patch("faster_whisper.WhisperModel")

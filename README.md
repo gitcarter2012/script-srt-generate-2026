@@ -64,6 +64,8 @@ Para o Whisper antigo com GPU, o script instala uma build CUDA compativel do PyT
 
 Os dois motores usam Silero VAD para ignorar intervalos sem voz. Os blocos de voz sao limitados a 15 segundos para evitar que trechos mais baixos sejam descartados dentro de janelas longas. No Whisper antigo, somente esses intervalos sao enviados ao modelo, reduzindo alucinacoes em silencio e o tempo de processamento.
 
+No faster-whisper, segmentos de ate duas palavras com confianca media inferior a 20% sao removidos. O limite conservador elimina falsos positivos isolados sem descartar frases longas ou falas curtas reconhecidas com confianca.
+
 ## Chave DeepL
 
 Preencha `config.json`:

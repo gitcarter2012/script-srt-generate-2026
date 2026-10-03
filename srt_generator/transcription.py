@@ -7,6 +7,7 @@ from .runtime import model_cache_dir, try_install_nvidia_runtime
 
 MAX_WORD_GAP_SECONDS = 2.5
 MAX_MERGED_SEGMENT_SECONDS = 7.5
+MIN_SHORT_SEGMENT_WORD_PROBABILITY = 0.2
 
 
 def _split_segment_at_word_gaps(segment: Any, words: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -71,6 +72,22 @@ def _merge_incomplete_nearby_segments(
             previous["words"] = [*previous_words, *segment_words]
 
     return merged_segments
+
+
+def _filter_low_confidence_short_segments(
+    segments: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    filtered_segments = []
+    for segment in segments:
+        words = segment.get("words", [])
+        if not isinstance(words, list) or len(words) > 2 or not words:
+            filtered_segments.append(segment)
+            continue
+
+        probabilities = [float(word.get("probability", 1.0)) for word in words]
+        if sum(probabilities) / len(probabilities) >= MIN_SHORT_SEGMENT_WORD_PROBABILITY:
+            filtered_segments.append(segment)
+    return filtered_segments
 
 
 class FasterWhisperTranscriber:
@@ -188,7 +205,8 @@ class FasterWhisperTranscriber:
 
         if on_progress:
             on_progress(total_duration, total_duration)
-        return _merge_incomplete_nearby_segments(normalized_segments)
+        merged_segments = _merge_incomplete_nearby_segments(normalized_segments)
+        return _filter_low_confidence_short_segments(merged_segments)
 
 
 class LegacyWhisperTranscriber:
