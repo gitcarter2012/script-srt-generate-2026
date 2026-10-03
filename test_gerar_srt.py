@@ -1,4 +1,5 @@
 import importlib
+from contextlib import contextmanager
 from pathlib import Path
 import tempfile
 import unittest
@@ -271,6 +272,37 @@ class TranscriptionProgressTests(unittest.TestCase):
         result = _filter_low_confidence_short_segments(segments)
 
         self.assertEqual([segment["text"] for segment in result], ["Yes", "long uncertain phrase"])
+
+    @patch("srt_generator.transcription.get_audio_duration_seconds", side_effect=[100.0, 100.0])
+    @patch("srt_generator.transcription.get_media_duration_seconds", side_effect=[100.0, 100.0])
+    @patch("srt_generator.transcription.recovered_audio_path")
+    def test_recovers_audio_when_decoder_returns_truncated_duration(
+        self,
+        recovered_audio: Mock,
+        media_duration: Mock,
+        audio_duration: Mock,
+    ) -> None:
+        truncated_info = type("Info", (), {"duration": 10.0})()
+        complete_info = type("Info", (), {"duration": 100.0})()
+        model = Mock()
+        model.transcribe.side_effect = [
+            (iter([]), truncated_info),
+            (iter([FakeSegment()]), complete_info),
+        ]
+
+        @contextmanager
+        def recovered_path(input_path: Path) -> object:
+            yield Path("recovered.wav")
+
+        recovered_audio.side_effect = recovered_path
+        transcriber = FasterWhisperTranscriber.__new__(FasterWhisperTranscriber)
+        transcriber.model = model
+
+        result = transcriber._transcribe_once(Path("broken.mp4"), "ja", None)
+
+        self.assertEqual(result[0]["text"], "Hello")
+        self.assertEqual(model.transcribe.call_count, 2)
+        self.assertEqual(model.transcribe.call_args_list[1].args[0], "recovered.wav")
 
     @patch("srt_generator.transcription.try_install_nvidia_runtime", return_value=True)
     @patch("faster_whisper.WhisperModel")

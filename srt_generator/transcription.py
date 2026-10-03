@@ -2,6 +2,7 @@ import importlib
 from pathlib import Path
 from typing import Any, Callable
 
+from .media import get_audio_duration_seconds, get_media_duration_seconds, recovered_audio_path
 from .runtime import model_cache_dir, try_install_nvidia_runtime
 
 
@@ -166,6 +167,7 @@ class FasterWhisperTranscriber:
         input_path: Path,
         source_language: str,
         on_progress: Callable[[float, float], None] | None,
+        allow_audio_recovery: bool = True,
     ) -> list[dict[str, object]]:
         segments_generator, info = self.model.transcribe(
             str(input_path),
@@ -188,6 +190,31 @@ class FasterWhisperTranscriber:
             hallucination_silence_threshold=2.0,
         )
         total_duration = max(float(getattr(info, "duration", 0.0)), 0.001)
+        known_durations = [
+            duration
+            for duration in (
+                get_audio_duration_seconds(input_path),
+                get_media_duration_seconds(input_path),
+            )
+            if duration
+        ]
+        expected_duration = max(known_durations, default=None)
+        if (
+            allow_audio_recovery
+            and expected_duration
+            and total_duration < expected_duration * 0.9
+        ):
+            print(
+                "Audio decodificado parcialmente; recuperando a faixa completa "
+                "com FFmpeg antes da transcricao..."
+            )
+            with recovered_audio_path(input_path) as recovered_path:
+                return self._transcribe_once(
+                    recovered_path,
+                    source_language,
+                    on_progress,
+                    allow_audio_recovery=False,
+                )
         normalized_segments = []
         for segment in segments_generator:
             words = [

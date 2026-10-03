@@ -66,6 +66,8 @@ Os dois motores usam Silero VAD para ignorar intervalos sem voz. Os blocos de vo
 
 No faster-whisper, segmentos de ate duas palavras com confianca media inferior a 20% sao removidos. O limite conservador elimina falsos positivos isolados sem descartar frases longas ou falas curtas reconhecidas com confianca.
 
+Se o decoder interno entregar apenas parte da faixa de audio, o script compara a duracao decodificada com as duracoes do stream e do conteiner. Uma diferenca superior a 10% aciona a recuperacao automatica para WAV temporario pelo FFmpeg; o arquivo temporario e removido ao terminar.
+
 ## Chave DeepL
 
 Preencha `config.json`:
