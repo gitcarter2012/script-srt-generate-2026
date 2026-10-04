@@ -1,4 +1,5 @@
 import importlib
+import importlib.util
 import logging
 import os
 from pathlib import Path
@@ -11,6 +12,8 @@ COMMON_DEPENDENCIES = {
     "requests": "requests",
     "rich": "rich",
 }
+FASTER_WHISPER_PACKAGE = "faster-whisper==1.2.1"
+PYAV_PACKAGE = "av==16.0.1"
 
 _DLL_DIRECTORY_HANDLES: list[object] = []
 _CONFIGURED_DLL_DIRECTORIES: set[Path] = set()
@@ -32,11 +35,26 @@ def ensure_dependencies() -> None:
 def ensure_transcription_dependencies(engine: str, preferred_mode: str) -> None:
     if engine == "faster":
         configure_huggingface_downloads()
-        try:
-            importlib.import_module("faster_whisper")
-        except ModuleNotFoundError:
+        if importlib.util.find_spec("faster_whisper") is None:
             print("Instalando faster-whisper...")
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "faster-whisper==1.2.1"])
+            subprocess.check_call(
+                [sys.executable, "-m", "pip", "install", FASTER_WHISPER_PACKAGE, PYAV_PACKAGE]
+            )
+        elif not _can_import_pyav():
+            print("Reparando PyAV para faster-whisper...")
+            subprocess.check_call(
+                [
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    "--force-reinstall",
+                    "--no-cache-dir",
+                    PYAV_PACKAGE,
+                ]
+            )
+            if not _can_import_pyav():
+                raise RuntimeError("PyAV nao iniciou apos a reinstalacao.")
         importlib.invalidate_caches()
         configure_huggingface_downloads()
         return
@@ -70,6 +88,16 @@ def configure_huggingface_downloads() -> None:
     except ModuleNotFoundError:
         return
     hub_logging.set_verbosity_error()
+
+
+def _can_import_pyav() -> bool:
+    result = subprocess.run(
+        [sys.executable, "-c", "import av"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return result.returncode == 0
 
 
 def configure_legacy_ffmpeg() -> None:
